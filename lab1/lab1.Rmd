@@ -1,0 +1,120 @@
+---
+title: "CSSS/STAT 564 Lab Sessions #1"
+author: Alex Ziyu Jiang
+output: html_notebook
+---
+
+# Run a simple rstan example 
+
+We first look at how to run a simple demo code in rstan. 
+
+## The eigth schools example 
+
+### Introduction
+
+We will be looking at this classic example from Rubin(1981) and Gelman et. al.(2003). 
+
+- Eight schools were tested on the effect on standardized test for coaching 
+- Estimates and standard error of the treatment effect were calculated
+
+|School|Estimated treatment effect|Std. error of treatment effect |
+|------|---------|-----|
+|A| 28| 15|
+|B| 8 |10|
+|C| -3| 16|
+|D| 7 |11|
+|E| -1| 9|
+|F| 1 |11|
+|G| 18| 10|
+|H| 12| 18|
+
+### The demo model
+
+\begin{align*}
+y_j &\stackrel{i.i.d}{\sim} N(\theta_j, \sigma_j^2), j = 1,...,J=8~~\text{(likelihood model)}  \\
+\theta_j &\stackrel{i.i.d}{\sim} N(\mu , \tau), j = 1,...,J=8~~\text{(prior)} \\
+p(\sigma_j,\mu, \tau) &\propto 1 ~~\text{(flat priors)}
+\end{align*}
+
+### breaking down the model
+
+**observables**
+
+- $y_j$: estimated treatment effects 
+- $\sigma_j$: standard error of effect estimated 
+- $J$: number of schools 
+
+**unknown parameters**
+
+- $\theta_j$: school treatment effects 
+- $\mu$: population treatment effect
+- $\tau$: standard deviation in school treatment effects
+
+### key parts in a stan code
+
+**required parts**
+
+- data: data to be fed in the stan model
+- parameters: unknown parameters in the model; goal of inference
+- model: usually includes likelihood and prior
+
+**optional parts**
+
+- transformed parameters: preprocessing the parameter
+- generated quantities: preprocessing the results 
+
+
+```{r include=FALSE}
+# load the package
+library(rstan)  
+# model compilation settings
+options(mc.cores = parallel::detectCores()) # detect the number of CPU cores on the current host
+rstan_options(auto_write = TRUE) # load the package
+# set your working directory, basically where you expect your code outputs and your stan code to be
+setwd("C:\\Users\\00000\\Documents\\GitHub\\CSSS-STAT-564\\lab1")
+```
+
+### the stan code (saved as '8schools.stan')
+
+```{stan, eval = FALSE}
+// not run
+data {
+  int<lower=0> J;         // number of schools 
+  real y[J];              // estimated treatment effects
+  real<lower=0> sigma[J]; // standard error of effect estimates 
+}
+parameters {
+  real mu;                // population treatment effect
+  real<lower=0> tau;      // standard deviation in treatment effects
+}
+model {
+  theta ~ normal(mu, tau); // prior
+  y ~ normal(theta, sigma); // likelihood
+}
+```
+
+**important notes**
+
+- vectorize your data: use <code>y[J]</code> to specify a vector of length J
+- specify the range of your data: standard deviation/error has lower bound 0, use <code>lower=0</code>
+- the second parameter in <code>normal()</code> is the standard deviation, not the variance
+
+### run the model in rstudio
+
+After coding the .stan file and saving it to the same directory of our R script, we can compile it in RStudio. 
+
+```{r, message=FALSE, warning=FALSE}
+# feed in the data (match the data part in your stan code)
+schools_dat <- list(J = 8, 
+                    y = c(28, 8, -3,  7, -1,1, 18, 12),
+                    sigma = c(15, 10, 16, 11, 9, 11, 10, 18))
+# run the stan code 
+fit <- stan(file = "C:\\Users\\00000\\Documents\\GitHub\\CSSS-STAT-564\\lab1\\8schools.stan", data = schools_dat,refresh = 0)
+```
+
+We can call <code>stan_plot</code> to visualize the model output:
+
+```{r}
+stan_plot(fit, show_density = TRUE)
+```
+
