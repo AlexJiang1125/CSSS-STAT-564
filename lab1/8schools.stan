@@ -4,7 +4,6 @@ data {
   real<lower=0> sigma[J]; // standard error of effect estimates 
 }
 parameters {
-  real theta[J]; // school treatment effects
   real mu;                // population treatment effect
   real<lower=0> tau;      // standard deviation in treatment effects
 }

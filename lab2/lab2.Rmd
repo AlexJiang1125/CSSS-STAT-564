@@ -1,0 +1,295 @@
+---
+title: 'CSSS/STAT 564 Lab Sessions #2'
+author: "Alex Ziyu Jiang"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r include=FALSE}
+# load and make sure you have downloaded the following packages:
+library(ggplot2)
+library(rstan) 
+library(tidyverse)
+library(LaplacesDemon)
+library(HDInterval)
+# model compilation settings
+options(mc.cores = parallel::detectCores()) # detect the number of CPU cores on the current host
+rstan_options(auto_write = TRUE) 
+# set your working directory, basically where you expect your code outputs and your stan code to be
+setwd("C:\\Users\\00000\\Documents\\GitHub\\CSSS-STAT-564\\lab2")
+```
+
+
+Acknowledgements: the lab session materials are heavily based on our former course TA, Connor Gilroy's course materials. Check out his amazing resources here: https://ccgilroy.github.io/csss564-labs-2019/
+
+# Part 1: Sampling and information
+
+Information content (also called surprisal) is a way of characterizing the amount of information gained from sampling. It's related to probability: $-\ln(p)$ (note that we choose $e$ as the base number -- sometimes we also use $\log$,). $p$ comes from the distribution you choose to model the sample, so how informative or surprising you think each observation depends on what model you choose for it.
+
+We learned from class that the information/surprisal has an additive form: if we got i.i.d sample $y = (y_1,...,y_n)$, based on the model $p(y_i|\theta_m), \theta_m \in \Theta_m$ (notice that we need to choose a model first before calculating the informal/surprisal):
+
+\begin{align*}
+\mathrm{I}\left(y \mid \theta_{m}\right)=\sum_{i=1}^{n}-\ln p\left(y_{i} \mid \theta_{m}\right)=-\sum_{i=1}^{n} \ln p\left(y_{i} \mid \theta_{m}\right)
+\end{align*}
+
+Another important quantity is **entropy**, which is essentially the expected information over the chosen model (in other words, if we calculated $\mathrm{I}\left(y \mid \theta_{m}\right)$, we calculate the expectation over $p\left(y_{i} \mid \theta_{m}\right)$):
+
+\begin{align*}
+\mathrm{H}\left(\theta_{m}\right)=-\int_{\mathcal{Y}} p\left(y \mid \theta_{m}\right) \ln p\left(y \mid \theta_{m}\right) d y
+\end{align*}
+
+You can think of the entropy as the limit of the sample average of individual information/surprisal $p(y_i \mid \theta_{m})$, if the model is correctly specified.
+
+\begin{align*}
+\mathrm{H}\left(\theta_{m}\right)= \mathbb{E}\left[\mathrm{I}\left(y \mid \theta_{m}\right)\right]=\lim _{n \rightarrow \infty} \frac{\sum_{i=1}^{n}-\ln p\left(y_{i} \mid \theta_{m}\right)}{n}
+\end{align*}
+
+Also, we know from the class that if we 'believe' the data comes from model $p(y|\theta_a)$, but it is in fact from the model $p(y|\theta_b)$, the limit of the sample average of individual information/surprisal becomes
+
+\begin{align*}
+\begin{aligned}
+\mathbb{E}_{\theta_a}\left[\mathrm{I}\left(y \mid \theta_{b}\right)\right] &=\mathrm{H}\left(\theta_{a}, \theta_{b}\right)=\int_{\mathcal{Y}} p\left(y \mid \theta_{a}\right) \mathrm{I}\left(y \mid \theta_{b}\right) d y \\
+&=-\int_{\mathcal{Y}} p\left(y \mid \theta_{a}\right) \ln p\left(y \mid \theta_{b}\right) d y
+\end{aligned}
+\end{align*}
+
+this is called the **cross entropy**, which is always be no less than the entropy with model correctly specified: 
+
+\begin{align*}
+\mathrm{KL}\left(\theta_{a} \| \theta_{b}\right)=\mathrm{H}\left(\theta_{a}, \theta_{b}\right)-\mathrm{H}\left(\theta_{a}\right) \geq 0
+\end{align*}
+
+
+We approximate the entropy of model $N(0,1)$ and the cross entropy of model $N(0,1)$ misspecified with $N(-1,1)$.
+
+For normal distribution we have the following nice results about entropy and KL divergence:
+
+- For a normal model with mean $\mu$, variance $\sigma^2$, the entropy is $\frac{1}{2} \log \left(2 \pi e \sigma^{2}\right)\approx 1.419$.
+- For $X_1 \sim N(\mu_1, \sigma^2), X_2 \sim N(\mu_2,\sigma^2)$, the KL divergence is $D_{\mathrm{KL}}\left(X_{1} \| X_{2}\right)=\frac{\left(\mu_{1}-\mu_{2}\right)^{2}}{2 \sigma_{2}^{2}}+\frac{1}{2}\left(\frac{\sigma_{1}^{2}}{\sigma_{2}^{2}}-1-\ln \frac{\sigma_{1}^{2}}{\sigma_{2}^{2}}\right) = 0.5$
+
+```{r}
+# calculate surprisal for our normal samples
+set.seed(123)
+nsims <- 10000
+normal_samples <- rnorm(nsims, mean = 0, sd = 1)
+df <- 
+  tibble(samples = normal_samples) %>%
+  rowid_to_column(var = "n") %>%               # index for each observation
+  mutate(p = dnorm(samples, mean = 0, sd = 1), # probability of each observation
+         surprisal = -log(p),                  # information content of each obs
+         cumulative_sum = cumsum(surprisal),   # sample surprisal up to n
+         cumulative_mean = cummean(surprisal), # entropy estimate up to n
+         p_mispec = dnorm(samples, mean = -1, sd = 1), # probability of the misspecified distribution
+         surpisal_mispec = -log(p_mispec), # information content based on the misspecified distribution
+         cumulative_mispec_sum = cumsum(surpisal_mispec), # sample misspecified surprisal up to n
+         cumulative_mispec_mean = cummean(surpisal_mispec) # cross entropy estimate up to n
+         ) # average sample surprisal to n
+
+# calculate entropy
+ent_normal <- 0.5 * log(2 * pi * exp(1) * 1^2)
+ent_normal
+# cross entropy
+kl_div <- 0.5
+ent_cross <- ent_normal + kl_div
+
+# plot average surprisal 
+ggplot(df) + 
+  geom_line(aes(x = n, y = cumulative_mean), col = "blue") + 
+  labs(y = "Surprisal (cumulative average)") + 
+  geom_hline(yintercept = ent_normal, linetype = "dashed", color = "blue") +
+  geom_line(aes(x = n, y = cumulative_mispec_mean), col = "red") + 
+  geom_hline(yintercept = ent_cross, linetype = "dashed", color = "red") + 
+  annotate("text",x = 9500, y = 1.5,label = "Entropy") + 
+  annotate("text",x = 9130, y = 2,label = "Cross Entropy") + 
+  annotate("text",x = 8950, y = 1.65,label = "KL divergence") + 
+  geom_segment(aes(x = 8000, y = ent_normal, xend = 8000, yend = 0.5 + ent_normal),
+                  arrow = arrow(length = unit(0.25, "cm")))
+```
+
+
+# Part 2: Conjugate Priors(I) - the beta and binomial distributions
+
+## Example: coin flips and the binomial distribution
+
+Our main example in this lab will be a collection of coin flips, modeled using the binomial distribution:
+
+$$y \sim \operatorname{Binomial}(N, \theta)$$
+
+where $y$ is the number of heads, $N$ is the number of flips, and $\theta$ is the probability of heads. We'd like to estimate $\theta$. 
+
+We see that the distribution of $y$ given $\theta$ has form 
+
+$$p(Y=k|\theta) = \binom{n}{k}\theta^y(1-\theta)^{n-k}, k = 0,...,n$$
+
+where $\theta \in [0,1]$.
+
+## Beta distribution -- the conjugate prior for binomial distribution
+
+To do Bayesian inference, we need to specify a prior for $\theta$. A good prior distribution for $\theta$ in the binomial distribution is a beta distribution. There are two reasons: 
+
+- The beta distribution is continuous bounded between 0 and 1, like $\theta$ should be (our prior belief coincides with what data shows us)
+- "Model conjugacy": the posterior of $\theta$ based on a beta prior is easy to calculate:
+
+$$p(\theta|a,b) = \frac{\Gamma(a+b)}{\Gamma(a)\Gamma(b)}\theta^{a-1}(1-\theta)^{b-1} \propto \theta^{a-1}(1-\theta)^{b-1}$$
+$$p(Y=k|\theta) = \binom{n}{k}\theta^k(1-\theta)^{n-k}, k = 0,...,n$$
+
+$$p(\theta|Y=k) \propto p(\theta|a,b)p(Y=k|\theta) \propto \theta^{a+k-1}(1-\theta)^{n-k+b-1}$$
+
+(For more rigorous derivation, see the first section in https://en.wikipedia.org/wiki/Conjugate_prior)
+
+this gives us a lot of useful information:
+
+- the posterior distribution of $\theta|Y$ is still a beta distribution
+- we can directly obtain the hyperparameters for the posterior distribution $(a' = a+k, b' = b+n-k)$
+- there is an interpretation for the hyperparameters $a,b$, which can be thought of as 'effective successes' and 'effective failures' based on our prior belief (note that $a,b$ can be non-integers, which does not really make sense as counts, hence the name 'effective'):
+
+$$E[\theta] = \frac{a}{a+b} = \frac{\# \text{prior succ}}{\#\text{prior total}} $$
+$$E[\theta|y] = \frac{a'=a+k}{a'+b'=a+b+n} = \frac{\# \text{prior succ} + \# \text{data succ}}{\#\text{prior total}+\#\text{data total}} $$
+
+## toy around your prior and likelihood!
+
+The Shiny app is adapted from Nan Xiao's post on Professor Matthew Stephens' blog fiveMinuteStats, check out their amazing work (and the website) here: https://stephens999.github.io/fiveMinuteStats/shiny_normal_example.html
+
+The interactive app is not available in html format, so you need to run the following code chunk in your RStudio. To make sure you can run the following code, remember to install package 'shiny' and 'ggsci'.
+
+```{r, echo = FALSE}
+library(shiny)
+library(ggsci)
+  shinyApp(
+    ui = fluidPage(
+  
+    # titlePanel('Bayesian inference for normal mean (known variance)'),
+  
+    sidebarLayout(
+      sidebarPanel(
+        width = 3,
+        numericInput("n_trials", label = "Trials:", value = 10, min = 0, step = 1L),
+        numericInput("y_successes", label = "Successes:", value = 5, min = 0, step = 1L),
+        hr(),
+        numericInput("prior_a", label = "Prior a:", value = 1, min = 1,step = 0.1),
+        numericInput("prior_b", label = "Prior b:", value = 1, min = 1, step = 0.1)
+      ),
+      mainPanel(
+        width = 9,
+        plotOutput("dist_plot")
+      )
+    )
+  
+  ),
+  server = function(input, output) {
+
+  output$dist_plot = renderPlot({
+
+    n_trials      = input$"n_trials"
+    y_successes  = input$"y_successes"
+    prior_a    = input$"prior_a"
+    prior_b = input$"prior_b"
+
+    if (y_successes > n_trials) return(NULL)
+
+    #n = length(y_data)
+    #data_mu = mean(y_data)
+    post_a = prior_a + y_successes
+    post_b = prior_b + n_trials - y_successes
+
+    set.seed(42)
+    y = seq(0,1,length.out = 500)  # to center plot on posterior
+    y_prior = dbeta(y, prior_a, prior_b)
+    y_lik   = dbeta(y, y_successes + 1,  n_trials - y_successes + 1)
+    y_post  = dbeta(y, post_a,  post_b)
+    y_max = max(c(y_prior, y_lik, y_post))
+
+    pal = rev(pal_lancet("lanonc")(3))
+
+    plot(y, y_prior, type = "l", col = pal[1],
+         lty = 2, xlim = c(min(y), max(y)), ylim = c(0, y_max),
+         ylab = "density", lwd = 2)
+    lines(y, y_lik,  type = "l", col = pal[2], lwd = 2)
+    lines(y, y_post, type = "l", col = pal[3], lwd = 2)
+    #abline(v = y_data, col = pal[2], lty = 3, lwd = 2)
+
+    legend("topright", col = c(pal, pal[2], pal[2]),
+           lty = c(2, 1, 1), cex = 1.5, lwd = 2, bty = "n",
+           legend = c("Prior", "Likelihood", "Posterior"))
+
+  })
+
+}
+)
+```
+
+- **setting 1**: $y \sim \text{Binomial}(5,10), \theta \sim \text{Beta}(a=1,b=2)$. We increase the number of hyperparameter $a$
+    - how will the prior change?
+    - how will the likelihood change?
+    - how will the posterior change?
+- **setting 2**: $\theta \sim \text{Beta}(1,1)$. We have a uniform prior -- posterior distribution is equal to the likelihood function
+- **setting 3**: $n = 0$, there is no data -- posterior distribution is equal to the prior distribution
+
+
+# grid approximation approach of posterior samples 
+
+Since we know that 
+
+$$p(\theta|x) \propto p(\theta)p(x|\theta)$$
+
+one way of approximating the posterior $p(\theta|x)$ is by **grid approximation**:
+
+## Intuition 
+
+- higher density: likelier to be sampled
+- use a discrete distribution to approximate the posterior, if the grid value is in a 'high density area', it has larger probability and is likelier to be sampled
+- we would expect the histogram of the sampled numbers to be close to the true density, if the grid is fine enough
+
+## The algorithm
+
+- find the intersection of support (the area of $\theta$ where both $p(\theta)$ and $p(x|\theta)$ takes positive values), in our case: $\theta \in (0,1)$
+- set up a grid $(\theta_1, ..., \theta_M)$ on that range, for example: $(0, 0.01 ..., 0.99, 1)$ (note the end points may have zero values)
+    - this is because we will be sampling among grid values $(\theta_1, ..., \theta_M)$ according to a discrete approximation of $p(\theta|x)$ (denoted as $\hat{p}(\theta|x)$), where $\hat{p}(\theta = \theta_i|x)$ takes positive values
+- calculate **unnormalized** approximated posterior distribution: $$\hat{g}(\theta = \theta_i|x) = p(\theta_i)p(x|\theta = \theta_i)$$
+- normalize the discrete probability: $$\hat{p}(\theta = \theta_i|x) = \frac{\hat{g}(\theta = \theta_i|x)}{\sum_{i=1}^M \hat{g}(\theta = \theta_i|x)}$$
+
+See this tutorial for more info about grid approximation of posterior distributions: http://patricklam.org/teaching/grid_print.pdf
+
+
+```{r}
+# grid approximation ----
+a_prior <- 1
+b_prior <- 1
+
+trials <- 10
+successes <- 5
+
+a_post <- a_prior + successes
+b_post <- b_prior + trials - successes
+
+# set up a probability grid
+p_grid <- seq(0, 1, length.out = 100)
+
+# generate prior values at points on the grid
+prior <- dbeta(x = p_grid, shape1 = a_prior, shape2 = b_prior)
+
+# generate likelihood values at points on the grid
+likelihood <- dbinom(x = successes, size = trials, prob = p_grid)
+
+# multiply the likelihood by the prior at each point on the grid
+unstd_posterior <- likelihood * prior
+
+# standardize the posterior to sum to 1
+posterior <- unstd_posterior / sum(unstd_posterior)
+
+
+# sample from posterior
+set.seed(20210415)
+nsims <- 1e4
+samples <- sample(p_grid, prob = posterior, size = nsims, replace = TRUE)
+summary(samples)
+
+# overlay the (normalized) histogram with the true posterior
+hist(samples, freq = FALSE)
+lines(p_grid, dbeta(x = p_grid, shape1 = a_post, shape2 = b_post))
+```
+
+

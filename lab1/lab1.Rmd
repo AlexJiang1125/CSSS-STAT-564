@@ -1,16 +1,35 @@
 ---
-title: "CSSS/STAT 564 Lab Sessions #1"
-author: Alex Ziyu Jiang
-output: html_notebook
+title: 'CSSS/STAT 564 Lab Sessions #1'
+author: "Alex Ziyu Jiang"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
 ---
 
-# Run a simple rstan example 
+```{r include=FALSE}
+# load and make sure you have downloaded the following packages:
+library(ggplot2)
+library(rstan) 
+library(tidyverse)
+library(LaplacesDemon)
+library(HDInterval)
+# model compilation settings
+options(mc.cores = parallel::detectCores()) # detect the number of CPU cores on the current host
+rstan_options(auto_write = TRUE) 
+# set your working directory, basically where you expect your code outputs and your stan code to be
+setwd("C:\\Users\\00000\\Documents\\GitHub\\CSSS-STAT-564\\lab1")
+```
+
+
+Acknowledgements: the lab session materials are heavily based on our former course TA, Connor Gilroy's course materials. Check out his amazing resources here: https://ccgilroy.github.io/csss564-labs-2019/
+
+# Part 1: Run a simple rstan example 
 
 We first look at how to run a simple demo code in rstan. 
 
 ## The eigth schools example 
-
-### Introduction
 
 We will be looking at this classic example from Rubin(1981) and Gelman et. al.(2003). 
 
@@ -28,15 +47,15 @@ We will be looking at this classic example from Rubin(1981) and Gelman et. al.(2
 |G| 18| 10|
 |H| 12| 18|
 
-### The demo model
+## The demo model
 
 \begin{align*}
 y_j &\stackrel{i.i.d}{\sim} N(\theta_j, \sigma_j^2), j = 1,...,J=8~~\text{(likelihood model)}  \\
-\theta_j &\stackrel{i.i.d}{\sim} N(\mu , \tau), j = 1,...,J=8~~\text{(prior)} \\
+\theta_j &\stackrel{i.i.d}{\sim} N(\mu , \tau^2), j = 1,...,J=8~~\text{(prior)} \\
 p(\sigma_j,\mu, \tau) &\propto 1 ~~\text{(flat priors)}
 \end{align*}
 
-### breaking down the model
+## breaking down the model
 
 **observables**
 
@@ -50,7 +69,7 @@ p(\sigma_j,\mu, \tau) &\propto 1 ~~\text{(flat priors)}
 - $\mu$: population treatment effect
 - $\tau$: standard deviation in school treatment effects
 
-### key parts in a stan code
+## key parts in a stan code
 
 **required parts**
 
@@ -63,26 +82,17 @@ p(\sigma_j,\mu, \tau) &\propto 1 ~~\text{(flat priors)}
 - transformed parameters: preprocessing the parameter
 - generated quantities: preprocessing the results 
 
+## the stan code (saved as '8schools.stan')
 
-```{r include=FALSE}
-# load the package
-library(rstan)  
-# model compilation settings
-options(mc.cores = parallel::detectCores()) # detect the number of CPU cores on the current host
-rstan_options(auto_write = TRUE) # load the package
-# set your working directory, basically where you expect your code outputs and your stan code to be
-setwd("C:\\Users\\00000\\Documents\\GitHub\\CSSS-STAT-564\\lab1")
-```
+(Note: to run this code chunk, save it as a separate file with the extension name '.stan' under the same directory as this .rmd file.)
 
-### the stan code (saved as '8schools.stan')
-
-```{stan, eval = FALSE}
+```{stan, output.var='priors', eval = FALSE, tidy = FALSE}
 // not run
 data {
   int<lower=0> J;         // number of schools 
   real y[J];              // estimated treatment effects
   real<lower=0> sigma[J]; // standard error of effect estimates 
-}
+
 parameters {
   real mu;                // population treatment effect
   real<lower=0> tau;      // standard deviation in treatment effects
@@ -99,7 +109,7 @@ model {
 - specify the range of your data: standard deviation/error has lower bound 0, use <code>lower=0</code>
 - the second parameter in <code>normal()</code> is the standard deviation, not the variance
 
-### run the model in rstudio
+## run the model in rstudio
 
 After coding the .stan file and saving it to the same directory of our R script, we can compile it in RStudio. 
 
@@ -118,3 +128,205 @@ We can call <code>stan_plot</code> to visualize the model output:
 stan_plot(fit, show_density = TRUE)
 ```
 
+# Part 2: Simulation
+
+```{r, include=FALSE}
+library(tidyr)
+library(ggplot2)
+
+# set the ggplot theme
+theme_set(theme_minimal())
+
+# center-align figures
+knitr::opts_chunk$set(fig.align = "center")
+
+# set a random seed and the number of simulations
+set.seed(123)
+nsims <- 10000
+```
+
+## Simulating by sampling
+
+Why is simulation important?
+
+- If you have a known distribution (a prior, or a likelihood) you can simulate data from it to understand how it will behave.
+
+- If you don’t know a (posterior) distribution, you can still approximate it by sampling from it.
+
+- To check the behavior of your model, you can simulate more data from the (posterior predictive) distribution using sampled parameter values.
+
+## Discrete distribution: Poisson
+
+The Poisson distribution is useful for modeling count data; it’s a discrete distribution that only takes on integer values that are nonnegative. We recall that a Poisson distribution with mean parameter $\lambda$ has the following probability mass function:
+
+\begin{align*}
+\operatorname{Pr}(X=k)=\frac{\lambda^{k} e^{-\lambda}}{k !}
+\end{align*}
+
+To calculate this in RStudio, we can use <code>dpois</code> to analytically calculate the density for a Poisson distribution with $\lambda$=5. (We stop at an arbitrary large value of $x$.)
+
+```{r}
+xs <- 0:15 # stop at x=15
+densities <- dpois(x = xs, lambda = 5) # calculates the poisson likelihood for x from 0 to 15 with mean parameter 5
+df <- tibble(x = xs, densities = densities) # create a dataframe with the xs and the densities
+ggplot(df, aes(x = x, y = densities)) + geom_col() # plot the densities as columns
+```
+
+Then, if we draw samples from the same distribution, we should get something close to the theoretical densities (i.e. the shape of the histogram of counts should be similar to the shape of the density function).
+
+To do this, we use the function <code>rpois</code> to generate i.i.d samples from the Poisson distribution $\text{Poisson}(\lambda = 5)$.
+
+```{r}
+poisson_samples <- rpois(n = nsims, lambda = 5)
+
+# first, plot counts
+tibble(samples = poisson_samples) %>%
+  ggplot(aes(x = samples)) + 
+  geom_bar()
+```
+
+We can also overlay these two together:
+
+```{r}
+# plot the density function/mass function of the Poisson density against the bar plot of empirical rates based on samples from the distribution
+
+# tally the samples by their values and calculate the rate for each value
+df2 <- tibble(samples = poisson_samples) %>%
+  count(samples) %>%
+  mutate(frac = n/nsims)
+
+# overlay the two graphs 
+df %>% ggplot(aes(x = x, y = densities)) +
+  geom_point(size = .5) + 
+  geom_line() +  
+  geom_col(data = df2, aes(x = samples, y = frac))
+```
+
+## Continuous distribution: Gamma
+
+The gamma distribution is a continuous probability distribution. We can plot an approximation of the shape from the true densities using a grid of values. A gamma distribution with shape parameter $\alpha$ and rate parameter $\beta$ has the following probability density function (beware of the specification of the parameters! If we use the scale parameter instead of the rate parameter, it is the inverse of $\beta$):
+
+\begin{align*}
+f(x)=\frac{\beta^{\alpha}}{\Gamma(\alpha)} x^{\alpha-1} e^{-\beta x}
+\end{align*}
+
+We’ll use $\text{Gamma}(2,0.1)$ —a shape parameter of 2, and a rate (or inverse scale) parameter of 0.1. Try changing these values and see how the distribution changes.
+
+```{r}
+# analytic densities: construct a set of grid values from 0 to 120
+xs <- seq(0, 120, by = 2)
+
+# be careful of the parameter: rate or scale?
+gamma_densities <- dgamma(x = xs, shape = 2, rate = 0.1)
+
+# plot the density values on a line
+p1 <- tibble(x = xs, densities = gamma_densities) %>%
+  ggplot(aes(x = x, y = densities)) +
+  geom_point(size = .5) + 
+  geom_line()
+p1 
+```
+
+Since this is a continuous distribution, we’ll use a kernel density (rather than a histogram) to plot the samples.
+
+```{r}
+# densities from samples
+gamma_samples <- rgamma(n = nsims, shape = 2, rate = 0.1)
+df.2 <- tibble(samples = gamma_samples)
+p2 <- data_frame(samples = gamma_samples) %>%
+  ggplot(aes(x = samples)) + 
+  geom_density()
+p2
+```
+
+If you know the theoretical distribution, another way to compare the samples to it is with a quantile-quantile plot:
+
+```{r}
+tibble(samples = gamma_samples) %>%
+  ggplot(aes(sample = samples)) + 
+  geom_qq(distribution = qgamma, 
+          dparams = list(shape = 2, rate = 0.1)) +  # generate points with coordinates as theoretical and empirical quantiles
+  geom_qq_line(distribution = qgamma,
+               dparams = list(shape = 2, rate = 0.1)) # generate the reference line 
+```
+
+Key thing to notice here: the approximation is less good in the long tail.
+
+## Distributional summaries
+
+### single-valued summaries: mean, median and mode
+
+There are multiple ways to summarize the central tendency of a distribution with a single value, including the mean, median, and mode (the value with the highest probability density). For some distributions (e.g. the normal distribution), these values are the same...but that’s not always true.
+
+If you’re giving a point estimate for a parameter, one of these values would be what you’d report.
+
+We can calculate those values from the Poisson samples:
+
+```{r}
+# strangely, R doesn't have a built-in function for calculating mode, so we need to code our own:
+mode <- function(x) {
+  return(as.numeric(tibble(samples = x) %>%
+  count(samples) %>%
+  filter(n == max(n)))[1])
+}
+
+mean(poisson_samples)
+median(poisson_samples)
+mode(poisson_samples)
+# or use Mode() in package LaplacesDemon
+LaplacesDemon::Mode(poisson_samples)
+```
+
+Try the same for the gamma samples!
+
+### Intervals
+
+We can also use intervals to summarize distributions. In this course we will place a large focus on **credible intervals**, which is constructed based on the (in our case, usually posterior) distribution of a given parameter. There are two common intervals used to summarize distributions: percentiles and HDIs (highest density intervals).
+
+
+### Comparing percentile interval and HDI
+
+For the Poisson distribution, the 50% credible intervals has lower bound the 25% quantile, and the 75% quantile as the upper bound:
+
+```{r}
+summary(gamma_samples)
+quantile(gamma_samples, probs = c(.25, .75))
+hdi <- hdi(gamma_samples, credMass=0.5)
+df <- data_frame(samples = gamma_samples)
+p.interval <- ggplot(df, aes(x = samples)) + geom_density()
+p.interval + 
+  geom_vline(xintercept = quantile(gamma_samples, probs = c(.25, .75)), 
+             color = "purple", linetype = "dashed")+ 
+  geom_vline(xintercept = c(hdi[1], hdi[2]),  
+             color = "red", linetype = "dashed") +
+  labs(title = "25%-75% percentile (purple) and 50% HDI (red)")
+```
+
+### Comparing mean, median and mode
+
+```{r}
+p.interval + geom_vline(xintercept = mean(gamma_samples), color = "blue") + 
+  geom_vline(xintercept = median(gamma_samples), color = "purple") + 
+  geom_vline(xintercept = LaplacesDemon::Mode(gamma_samples), color = "red") +
+  labs(title = "mean (blue), median (purple) and mode (red)")
+```
+
+What should you use? It depends! The mean is commonly used in Bayesian statistics, though rstan and bayesplot use the median and percentiles by default. The mode is less common, but it has a nice correspondence to the maximum likelihood estimate. In a Bayesian context, this is called maximum a posteriori estimation.
+
+## Monte Carlo Simulation 
+
+Approximating probability masses and densities through sampling is called Monte Carlo simulation. For continuous distributions, we’re approximating an integral. You can do this for arbitrary parts of the distribution:
+
+$$X \sim N(0,1), P(-1 \leq X \leq 1) \approx ?$$
+
+```{r}
+normal_samples <- rnorm(nsims, mean = 0, sd = 1)
+
+# how much probability is between -1 and +1 sd in a normal distribution?
+sum(normal_samples >= -1 & normal_samples <= 1) / nsims
+pnorm(1) - pnorm(-1)
+```
+
+Try changing <code>nsims</code> and the lower and upper bounds to see how the approximation improves.
+
+# Poll: Slides or markdown??
