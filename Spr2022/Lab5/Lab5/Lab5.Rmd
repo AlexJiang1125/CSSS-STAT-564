@@ -1,0 +1,664 @@
+---
+title: "Lab 5"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# 8H5
+
+Consider the data \texttt{(Wines2012)} data table. These data are expert ratings of 20 different French and American wines by 9 different French and American judges. Your goal is to model score, the subjective rating assigned by each judge to each wine. I recommend standardizing it. In this problem, consider only variation among judges and wines. Construct index variables of judge and wine and then use these index variables to construct a linear regression model. Justify your priors. You should end up with 9 judge parameters and 20 wine parameters. How do you interpret the variation among individual judges and individual wines? Do you notice any patterns, just by plotting the differences? Which judges gave the highest/lowest ratings? Which wines were rated worst/best on average?
+
+## Load packages
+
+```{r}
+library(rethinking)
+library(rjags)
+library(rstan)
+```
+
+We can first view the dataset:
+
+```{r}
+data(Wines2012)
+View(Wines2012)
+d <- Wines2012
+```
+
+We can consider building the following model: 
+
+Since we only consider only variation among judges and wines, we group the scores by judges and the different wines:
+
+\begin{align*}
+s_i &\sim N(\mu_i, \sigma^2) \\
+\mu_i &= \alpha_{\text{JID}[i]} + w_{\text{WID}[i]} \\
+\alpha_{\text{JID}[i]} &\sim N(0,0.5^2) \\
+\beta_{\text{WID}[i]} &\sim N(0,0.5^2) \\
+\sigma & \sim \text{Exp}(1)
+\end{align*}
+
+Couple of things to notice: 
+
+- standardize the continuous observation $s$ before fitting the data to the model
+- choosing priors for $\alpha$, $\beta$: after standardizing $s$ has mean 0, standard deviation 1, which is roughly approximated as $N(0,1)$. For two independent effects $\alpha$, $\beta$, if we place a normal prior $N(0,0.5)$ on these effects, there sum will be $N(0,1)$, which covers the bulk of our data
+
+```{r}
+dat_list <- list(
+    S = standardize(d$score), # standardize the data 
+    jid = as.integer(d$judge), # group by judge
+    wid = as.integer(d$wine) # group by wine
+)
+# have a look at the ids
+str(dat_list)
+```
+
+Fit the model: 
+
+```{r}
+m1 <- quap(
+    alist(
+      # likelihood: score distributed as normal, mean is mu, std is sigma
+        S ~ dnorm( mu , sigma ),
+      # mean function: mean broken into two groups, judge effect(a) and wine effect(w)
+      # indexed by their ids
+        mu <- a[jid] + w[wid],
+      # priors
+        a[jid] ~ dnorm(0,0.5),
+        w[wid] ~ dnorm(0,0.5),
+        sigma ~ dexp(1)
+    ), 
+    # data 
+    data=dat_list)
+plot( precis( m1 , 2 ) )
+```
+
+### STAN implementation
+
+```{r}
+library(rstan)
+model_code <- "
+  data{
+    // data 
+    int<lower=1> N; // number of observations
+    vector[N] S; // obsrevations
+    
+    // grouping factors
+    int<lower=1> Jid; // number of judge ids
+    int<lower=1, upper=Jid> jid[N]; // judge ids
+    int<lower=1> Wid; // number of judge ids
+    int<lower=1, upper=Wid> wid[N]; // judge ids
+    
+    // hyperparameters: feed in the values
+    real ma;
+    real mb;
+    real sa;
+    real sb;
+    real lambda;
+  }
+  // important! for parameters you want to set their ranges
+  parameters{
+    vector[Jid] a; // judge effect
+    vector[Wid] b; // wine effect
+    real<lower=0> sigma;
+  }
+  model{
+    // declare variable for the expected outcome
+    // important! mu is a local variable
+    // in stan we need to put mu in the model, instead of the parameter
+    vector[N] mu; 
+    // priors
+    a ~ normal(ma, sa);
+    b ~ normal(mb, sb);
+    sigma ~ exponential(lambda);
+    // likelihood
+    for (i in 1:N) {
+      mu[i] = a[jid[i]] + b[wid[i]];
+    }
+    S ~ normal(mu, sigma);
+  }
+"
+stan.out <- stan(
+  model_code = model_code,
+  iter = 1e4, # length of the markov chain
+  data = list(
+    N = length(dat_list$S),
+    S = dat_list$S,
+    Jid = max(dat_list$jid),
+    jid = dat_list$jid,
+    Wid = max(dat_list$wid),
+    wid = dat_list$wid,
+    ma = 0,
+    sa = 0.5,
+    mb = 0,
+    sb = 0.5,
+    lambda = 1
+  )
+)
+print(stan.out)
+stan_plot(stan.out, pars = c("a", "b"))
+```
+### JAGS implementation
+
+```{r}
+m1_code <- "
+  # the data object we read in will also be here 
+  data {
+    D <- dim(S)
+    n <- D[1]
+  }
+  model{
+  # in JAGS we tend to specify everything iteratively
+   for(i in 1:n){
+      # likelihood
+      S[i] ~ dnorm(mu[i], tau)
+      # bracket notation
+      mu[i] = a[jid[i]] + b[wid[i]]
+      # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+    # conditional mean using matrix algebra
+    # beware of the precision specification
+    for (j in 1:Jid) {
+      a[j] ~ dnorm(ma, pow(sa, -2))
+    }
+    for (j in 1:Wid) {
+      b[j] ~ dnorm(mb, pow(sb, -2))
+    }
+    sigma ~ dexp(lambda)
+    tau <- pow(sigma, -2)
+  }
+"
+m8.5.jags <- jags.model(
+  file = textConnection(m1_code),
+  data = list(
+    S = dat_list$S,
+    jid = dat_list$jid,
+    wid = dat_list$wid,
+    Jid = max(dat_list$jid),
+    Wid = max(dat_list$wid),
+    ma = 0,
+    sa = 0.5,
+    mb = 0,
+    sb = 0.5,
+    lambda = 1
+  )
+)
+```
+
+### view results
+
+```{r}
+m8.5.samps <- coda.samples(m8.5.jags,
+                           variable.names = c("a", "b"),
+                           n.iter = 1e4)
+m8.5.samps.df <- as.data.frame(m8.5.samps[[1]])
+plot(precis(m8.5.samps.df, depth = 2))
+```
+
+### interpret the data 
+
+How do you interpret the variation among individual judges and individual wines? Do you notice any patterns, just by plotting the differences? Which judges gave the highest/lowest ratings? Which wines were rated worst/best on average?
+
+- Judges with lower values are harsher on average. Judges with higher values liked the wines more on average
+- Wines with lower values are generally given lower scores and vice versa
+- Overall, there is more variation from judge than from wine
+
+## Model Matrix 
+
+Equivalently we can re-express this model in matrix form. Suppose we group the 'wine effects' and the 'judge effects' in to vectors: $\boldsymbol{\alpha} = (\alpha_1, ..., \alpha_9)^T$, $\boldsymbol{\beta} = (\beta_1, ..., \beta_{20})^T$. And then we build two model matrix, $\mathbf{X_{\alpha}}_{n \times 20}, \mathbf{X_{\beta}}_{n \times 9}$ that indicates the allocation of each data row: 
+
+\begin{align*}
+\mathbf{X_{\alpha}}_{i,j} = 1, \text{ if the i-th score is given by judge $j$, o.w.$ \mathbf{X_{\alpha}}_{i,j} = 0$}
+\end{align*}
+
+The same goes for $\mathbf{X_{\beta}}$. 
+
+We thus preprocess the dataset to get the model matrix we want:
+
+```{r}
+dat_x <- data.frame(
+  score = standardize(d$score),
+  judge = (d$judge),
+  wine = (d$wine)
+)
+# making the model matrix
+x <- model.matrix(~  judge + (wine-1),
+                  data = dat_x)
+
+x <- model.matrix(~  judge + wine-1,
+                  data = dat_x,
+                  contrasts.arg = list(wine = contrasts(d$wine, contrasts = FALSE)))
+# view the data
+dat_x[1,]
+x[1,]
+# break into two matrices
+x1 <- x[,1:9]
+x2 <- x[,10:29]
+```
+
+```{r}
+m1_x <- quap(
+    alist(
+      # likelihood: score distributed as normal, mean is mu, std is sigma
+        S ~ dnorm( mu , sigma ),
+      # mean function: mean broken into two groups, judge effect(a) and wine effect(w)
+      # indexed by their ids
+        mu <- x1 %*% a + x2 %*% b,
+      # priors
+        a ~ dnorm(0,0.5),
+        b ~ dnorm(0,0.5),
+        sigma ~ dexp(1)
+    ), 
+    # data 
+    data=list(
+      x1 = x1,
+      x2 = x2,
+      S = standardize(d$score)
+    ),
+    start=list(
+      a = rep(0, ncol(x1)),
+      b = rep(0, ncol(x2))
+    )
+)
+plot( precis( m1_x , 2 ) )
+```
+
+```{r}
+m1_code <- "
+  data {
+    D <- dim(S)
+    n <- D[1]
+  }
+  model{
+    
+   for(i in 1:n){
+      # likelihood
+      S[i] ~ dnorm(mu[i], tau)
+      
+      # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+   mu = x1%*%a + x2%*%b 
+   # conditional mean using matrix algebra
+   for (j in 1:Jid) {
+     a[j] ~ dnorm(ma, pow(sa, -2))
+   }
+   for (j in 1:Wid) {
+     b[j] ~ dnorm(mb, pow(sb, -2))
+   }
+   sigma ~ dexp(lambda)
+   tau <- pow(sigma, -2)
+}
+"
+m8.5.jags <- jags.model(file = textConnection(m1_code), 
+                        data = list(S = dat_list$S,
+                                    Jid = max(dat_list$jid),
+                                    Wid = max(dat_list$wid),
+                                    x1 = x1,
+                                    x2 = x2,
+                                    ma = 0,
+                                    sa = 0.5,
+                                    mb = 0,
+                                    sb = 0.5,
+                                    lambda = 1))
+```
+
+```{r}
+m8.5.samps <- coda.samples(m8.5.jags, variable.names = c("a", "b"), 
+                           n.iter = 1e4)
+m8.5.samps.df <- as.data.frame(m8.5.samps[[1]])
+plot(precis(m8.5.samps.df, depth = 2))
+```
+
+```{r}
+library(rstan)
+model_code <- "
+  data{
+    // data 
+    int<lower=1> N; // number of observations
+    real S[N]; // obsrevations
+    
+    // matrices corresponding to grouping factors
+    int<lower=1> Jid; // number of judge ids
+    int<lower=1> Wid; // number of wine ids
+    matrix[N,Jid] x1; // model matrix for judge
+    matrix[N,Wid] x2; // model matrix for wine
+    
+    // hyperparameters
+    real ma;
+    real mb;
+    real sa;
+    real sb;
+    real lambda;
+  }
+  parameters{
+    vector[Jid] a; // judge effect
+    vector[Wid] b; // wine effect
+    real<lower=0> sigma;
+  }
+  model{
+    real mu[N];
+    // priors
+    a ~ normal(ma, sa);
+    b ~ normal(mb, sb);
+    sigma ~ exponential(lambda);
+    // likelihood
+    S ~ normal(x1*a + x2*b, sigma);
+  }
+"
+stan.out <- stan(model_code = model_code, iter = 1e4,
+                 data = list(N = length(dat_list$S),
+                             S = dat_list$S,
+                             x1 = x1,
+                             x2 = x2,
+                             Jid = max(dat_list$jid),
+                             Wid = max(dat_list$wid),
+                             ma = 0,sa = 0.5,
+                             mb = 0,sb = 0.5,lambda = 1))
+print(stan.out)
+stan_plot(stan.out, pars = c("a","b"))
+```
+
+# 8H6
+
+Now consider three features of the wines and judges:
+- flight: Whether the wine is red or white.
+- wine.amer: Indicator variable for American wines. 
+- judge.amer: Indicator variable for American judges.
+
+Use indicator or index variables to model the influence of these features on the scores. Omit the individual judge and wine index variables from Problem 1. Do not include interaction effects yet. Again justify your priors. What do you conclude about the differences among the wines and judges? Try to relate the results to the inferences in the previous problem.
+
+### Indicator Model
+
+We can build the following model: 
+
+\begin{align*}
+s_i &\sim N(\mu_i, \sigma^2) \\
+\mu_i &= a + \beta_W W_{amer,i} + \beta_J J_{amer,i} + \beta_R R_i \\
+a &\sim N(0,0.2^2) \\
+b_W, b_J, b_R &\sim N(0,0.5^2) \\
+\sigma & \sim \text{Exp}(1)
+\end{align*}
+
+Again, some thoughts on prior choice: 
+
+- After centering the score, it makes sense to place a tighter prior on the intercept
+- Again to place priors on the b's we can 'think about extremes', but a standard deviation of 0.5 is fine for here
+
+```{r}
+dat_list2 <- list(
+    S = standardize(d$score),
+    W = d$wine.amer,
+    J = d$judge.amer,
+    R = ifelse(d$flight=="red",1L,0L)
+)
+str(dat_list2)
+
+m2a <- quap(
+    alist(
+        S ~ dnorm( mu , sigma ),
+        mu <- a + bW*W + bJ*J + bR*R,
+        a ~ dnorm( 0 , 0.2 ),
+        c(bW,bJ,bR) ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp(1)
+    ), data=dat_list2 )
+precis( m2a )
+```
+
+```{r}
+m2_code <- "
+  data {
+    D <- dim(S)
+    n <- D[1]
+  }
+  model{
+   for(i in 1:n){
+      # likelihood
+      S[i] ~ dnorm(mu[i], tau)
+      
+      # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+   mu = a + bW*W + bJ*J + bR*R
+   a ~ dnorm(0 ,pow(0.2,-2))
+   bW ~ dnorm(mb, pow(sb,-2))
+   bJ ~ dnorm(mb, pow(sb,-2))
+   bR ~ dnorm(mb, pow(sb,-2))
+   sigma ~ dexp(lambda)
+   tau <- pow(sigma, -2)
+}
+"
+m8.6.jags <- jags.model(file = textConnection(m2_code), 
+                        data = list(S = dat_list$S,
+                                    W = d$wine.amer,
+                                    J = d$judge.amer,
+                                    R = ifelse(d$flight=="red",1L,0L),
+                                    mb = 0,
+                                    sb = 0.5,
+                                    lambda = 1))
+m8.6.samps <- coda.samples(m8.6.jags, variable.names = c("a", "bW","bJ","bR","sigma"), 
+                           n.iter = 1e4)
+m8.6.samps.df <- as.data.frame(m8.6.samps[[1]])
+plot(precis(m8.6.samps.df, depth = 2))
+```
+
+```{r}
+library(rstan)
+model_code <- "
+  data{
+    // data 
+    int<lower=1> N; // number of observations
+    vector[N] S; // obsrevations
+    vector[N] W; // wine america
+    vector[N] J; // judge america
+    vector[N] R; // wine color type
+    
+    // hyperparameters
+    real ma;
+    real mb;
+    real sa;
+    real sb;
+    real lambda;
+  }
+  parameters{
+    real a, bW, bJ, bR;
+    real<lower=0> sigma;
+  }
+  model{
+    real mu[N];
+    // priors
+    a ~ normal(ma, sa);
+    bW ~ normal(mb, sb);
+    bJ ~ normal(mb, sb);
+    bR ~ normal(mb, sb);
+    sigma ~ exponential(lambda);
+    // likelihood
+    S ~ normal(a + W*bW + bJ*J + bR*R, sigma);
+  }
+"
+stan.out <- stan(model_code = model_code, iter = 1e4,
+                 data = list(N = length(d$score),
+                             S = standardize(d$score),
+                             W = d$wine.amer,
+                             J = d$judge.amer,
+                             R = ifelse(d$flight=="red",1L,0L),
+                             ma = 0,sa = 0.2,
+                             mb = 0,sb = 0.5,lambda = 1))
+print(stan.out)
+stan_plot(stan.out, pars = c("a","b"))
+```
+
+### index variable version 
+
+We can build the following model (we will only provide code for quap here): 
+
+\begin{align*}
+s_i &\sim N(\mu_i, \sigma^2) \\
+\mu_i &=  w_{\text{WID}[i]} + j_{\text{JID}[i]} + f_{\text{FID}[i]} \\
+w_{\text{WID}[i]}, j_{\text{WID}[i]},f_{\text{WID}[i]} &\sim N(0,0.5^2) \\
+\sigma & \sim \text{Exp}(1)
+\end{align*}
+
+```{r}
+dat_list2b <- list(
+    S = standardize(d$score),
+    wid = d$wine.amer + 1L,
+    jid = d$judge.amer + 1L,
+    fid = ifelse(d$flight=="red",1L,2L)
+)
+str(dat_list2b)
+m2b <- quap(
+    alist(
+        S ~ dnorm( mu , sigma ),
+        mu <- w[wid] + j[jid] + f[fid],
+        w[wid] ~ dnorm( 0 , 0.5 ),
+        j[wid] ~ dnorm( 0 , 0.5 ),
+        f[wid] ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp(1)
+    ), data=dat_list2b )
+precis( m2b , 2 )
+post <- extract.samples(m2b)
+diff_w <- post$w[,2] - post$w[,1]
+precis( diff_w )
+```
+
+## 8H7
+
+Now consider two-way interactions among the three features. You should end up with three different interaction terms in your model. These will be easier to build, if you use indicator variables. Again justify your priors. Explain what each interaction means. Be sure to interpret the model’s predictions on the outcome scale (mu, the expected score), not on the scale of individual parameters. You can use link to help with this, or just use your knowledge of the linear model instead. What do you conclude about the features and the scores? Can you relate the results of your model(s) to the individual judge and wine inferences from 8H5?
+
+\begin{align*}
+s_i &\sim N(\mu_i, \sigma^2) \\
+\mu_i &= a + \beta_W W_{amer,i} + \beta_J J_{amer,i} + \beta_R R_i + \beta_{WJ}W_{amer,i}J_{amer,i} +\beta_{WR}W_{amer,i}R_{amer,i} + \beta_{JR}J_{amer,i}R_{amer,i}\\
+a &\sim N(0,0.2^2) \\
+b_W, b_J, b_R &\sim N(0,0.5^2) \\
+b_WJ, b_JR, b_WR &\sim N(0,0.25^2) \\
+\sigma & \sim \text{Exp}(1)
+\end{align*}
+
+- a general suggestion for prior choice is to use a tighter normal prior on the interactions, we we are bringing in more parameters   
+
+```{r}
+dat_list2 <- list(
+    S = standardize(d$score),
+    W = d$wine.amer,
+    J = d$judge.amer,
+    R = ifelse(d$flight=="red",1L,0L)
+)
+m3 <- quap(
+    alist(
+      S ~ dnorm( mu , sigma ),
+    mu <- a + bW*W + bJ*J + bR*R +
+          bWJ*W*J + bWR*W*R + bJR*J*R,
+    a ~ dnorm(0,0.2),
+    c(bW,bJ,bR) ~ dnorm(0,0.5),
+    c(bWJ,bWR,bJR) ~ dnorm(0,0.25),
+    sigma ~ dexp(1)
+), data=dat_list2 )
+
+pred_dat <- data.frame(
+    W = rep( 0:1 , times=4 ),
+    J = rep( 0:1 , each=4 ),
+    R = rep( c(0,0,1,1) , times=2 )
+)
+mu <- link( m3 , data=pred_dat )
+row_labels <- paste( ifelse(pred_dat$W==1,"A","F") ,
+                 ifelse(pred_dat$J==1,"A","F") ,
+                 ifelse(pred_dat$R==1,"R","W") , sep="" )
+plot( precis( list(mu=mu) , 2 ) , labels=row_labels )
+```
+
+```{r}
+m3_code <- "
+  data {
+    D <- dim(S)
+    n <- D[1]
+  }
+  model{
+   for(i in 1:n){
+      # likelihood
+      S[i] ~ dnorm(mu[i], tau)
+      
+      # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+   mu = a + bW*W + bJ*J + bR*R + bWJ*W*J + bWR*W*R + bJR*J*R
+   a ~ dnorm(0 ,pow(0.2,-2))
+   bW ~ dnorm(mb, pow(sb,-2))
+   bJ ~ dnorm(mb, pow(sb,-2))
+   bR ~ dnorm(mb, pow(sb,-2))
+   bWJ ~ dnorm(mint, pow(sint,-2))
+   bWR ~ dnorm(mint, pow(sint,-2))
+   bJR ~ dnorm(mint, pow(sint,-2))
+   sigma ~ dexp(lambda)
+   tau <- pow(sigma, -2)
+}
+"
+m8.3.jags <- jags.model(file = textConnection(m3_code), 
+                        data = list(S = dat_list$S,
+                                    W = d$wine.amer,
+                                    J = d$judge.amer,
+                                    R = ifelse(d$flight=="red",1L,0L),
+                                    mb = 0,
+                                    sb = 0.5,
+                                    mint = 0,
+                                    sint = 0.25,
+                                    lambda = 1))
+```
+
+```{r}
+library(rstan)
+model_code <- "
+  data{
+    // data 
+    int<lower=1> N; // number of observations
+    vector[N] S; // obsrevations
+    vector[N] W; // wine america
+    vector[N] J; // judge america
+    vector[N] R; // wine color type
+    vector[N] WJ; 
+    vector[N] JR; 
+    vector[N] WR; 
+    
+    // hyperparameters
+    real mint;
+    real ma;
+    real mb;
+    real sint;
+    real sa;
+    real sb;
+    real lambda;
+  }
+  parameters{
+    real a, bW, bJ, bR, bWJ, bWR, bJR;
+    real<lower=0> sigma;
+  }
+  model{
+    real mu[N];
+    // priors
+    a ~ normal(ma, sa);
+    bW ~ normal(mb, sb);
+    bJ ~ normal(mb, sb);
+    bR ~ normal(mb, sb);
+    bWJ ~ normal(mint, sint);
+    bWR ~ normal(mint, sint);
+    bJR ~ normal(mint, sint);
+    sigma ~ exponential(lambda);
+    // likelihood
+    S ~ normal(a + W*bW + bJ*J + bR*R + bWJ*WJ + bWR*WR + bJR*JR, sigma);
+  }
+"
+stan.out <- stan(model_code = model_code, iter = 1e4,
+                 data = list(N = length(d$score),
+                             S = standardize(d$score),
+                             W = d$wine.amer,
+                             J = d$judge.amer,
+                             WJ = d$wine.amer*d$judge.amer,
+                             WR = d$wine.amer*ifelse(d$flight=="red",1L,0L),
+                             JR = d$judge.amer*ifelse(d$flight=="red",1L,0L),
+                             R = ifelse(d$flight=="red",1L,0L),
+                             ma = 0,sa = 0.2,
+                             mint = 0, sint = 0.5,
+                             mb = 0,sb = 0.5,lambda = 1))
+print(stan.out)
+stan_plot(stan.out, pars = c("a","b"))
+```

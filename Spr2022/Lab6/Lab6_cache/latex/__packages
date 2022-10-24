@@ -1,0 +1,10 @@
+base
+BayesTree
+StanHeaders
+ggplot2
+rstan
+gtools
+LaplacesDemon
+latex2exp
+coda
+rjags

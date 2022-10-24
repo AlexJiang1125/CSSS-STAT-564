@@ -1,0 +1,253 @@
+---
+title: "Lab 4"
+author: "Alex Ziyu Jiang"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+(The code materials are kindly provided by Professor Carlos Cinelli.)
+
+# Bayesian multiple linear regression: Saratoga Housing example 
+
+Today we look at an example of Bayesian multiple linear regression and show how to implement it using sampling softwares such as jags and rstan. Moreover, under a specific setting we show the relationship between Bayesian multiple linear regression and ridge regression, a frequentist regularization method commonly used in machine learning. 
+
+## model prerequisites
+
+As usual, we load the package we need (remember to install them first using \texttt{install.packages()}) if you haven't done so:
+
+```{r}
+rm(list = ls())
+library(rjags)
+library(rstan)
+library(glmnet)
+library(rethinking)
+options(scipen = 99)
+```
+
+## data preprocessing
+
+Then we load in the dataset and do some preprocessing to make the data suitable for our analysis. Just as a recap: for Bayesian regression models, standardizing (centering and rescaling by standard deviation) the predictors will lead to better MCMC sampling efficiency(Markov chains converge to equilibrium quicker) and easier prior choices, so here we standardize the columns in the data matrix.
+
+```{r}
+# Load data ---------------------------------------------------------------
+df <- read.csv("SaratogaHouses.csv")
+
+# create matrix
+x <- model.matrix(price ~ ., data = df)
+
+# scale variables (except constant)
+x.scale <- x
+x.scale[,-1] <- apply(x.scale[,-1], 2, function(z) (z - mean(z))/sd(z))
+y.scale <- df$price/sd(df$price)
+
+# save sd's to rescale back
+sdx <- apply(x[,-1], 2, sd)
+sdy <- sd(df$price)
+
+# function to rescale coefficients
+rescale <- function(beta){
+  beta <- beta*sdy/sdx
+  names(beta) <- colnames(x)[-1]
+  beta
+}
+```
+
+## model form
+
+Recall that here we are building a multivariate linear regression model. If the model matrix is $\mathbf{X}$, the vector of regression coefficients are $\boldsymbol{\beta}$,  the model has the following form: 
+
+$$
+\begin{aligned}
+y_{i} & \sim \operatorname{Normal}\left(\mu_{i}, \sigma^2\right), i = 1,...,n \\
+\boldsymbol{\mu} &=\mathbf{X}\boldsymbol{\beta}  \\
+\beta_0 & \sim \operatorname{Normal}(\mu_0, s_0^2 ) \\
+\beta_j & \sim \operatorname{Normal}(\mu_\beta,s_\beta^2), j = 1,...,p \\
+\sigma & \sim \operatorname{Exponential}(\lambda) \\
+\end{aligned}
+$$
+
+Here $\mu_\beta$ and $s_\beta^2$ represents the mean and variance for the regression coefficients $\beta_j$, and $\lambda$ is the rate coefficient of the exponential prior for $\sigma$. Note that $\mu_\beta$, $s_\beta^2$ and $\lambda$ are 'parameters' of the prior distributions, so instead of placing prior on them we feed them actual values -- these parameters are called **hyperparameters** in Bayesian statistics. We choose $\lambda = 1$, a relatively `flat' prior for the standard deviation. For the regression coefficients, we choose a bunch of normal priors with mean zero, because we don't really have prior knowledge about how each effect will look like before fitting the data. For the intercept model, we place a flat normal prior with standard deviation $s_0 = 1,000$. For the other variables, we place a 'tighter' regularization prior on all of these variables with standard deviation $s_\beta = 0.02$. 
+
+## model implementation
+
+### JAGS
+
+Finally, we compile the JAGS and STAN code for model implementation (note the notational difference regarding the normal variance/precision): 
+
+```{r, cache=TRUE}
+# JAGS --------------------------------------------------------------------
+
+# generic model code
+linear_model_code <- "
+  data{
+    D <- dim(x)
+    n <- D[1]
+    p <- D[2]
+  }
+  model{
+   for(i in 1:n){
+      # likelihood
+      y[i] ~ dnorm(mu[i], tau)
+      # # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+    # conditional mean using matrix algebra
+    mu <- x %*% beta
+    for(j in 1:p){
+      beta[j] ~ dnorm(mb[j], pow(sb[j], -2))
+    }
+    sigma ~ dexp(lambda)
+    tau <- pow(sigma, -2)
+  }
+"
+
+# flat prior for constant
+# tight regularizing priors for all other parameters
+model <- jags.model(file = textConnection(linear_model_code),
+                    data = list(x = x.scale,
+                                y = y.scale,
+                                mb = rep(0, ncol(x)),
+                                sb = c(1000, rep(.02, ncol(x)-1)),
+                                lambda = 1))
+nsim <- 5e3
+# burn in
+update(model, n.iter = nsim)
+
+# samples
+samps <- coda.samples(model = model, n.iter = nsim,
+                      variable.names = c("beta", "sigma"))
+# check trace plots
+# plot(samps)
+
+# transform back to original scale
+samps.df <- as.data.frame(samps[[1]])
+post.means <- apply(samps.df, 2, mean)[-c(1,20)]
+post.means <- rescale(post.means)
+post.means
+```
+
+We run the model and generate $5,000$ posterior samples for $\boldsymbol{\beta}$ and $\sigma$. We can use the posterior samples for $\boldsymbol{\beta}$ to calculate its posterior mean. Finally we transform it back to the original scale for clearer interpretation (in the sense that 'the rate of change' is associated with unit change in the actual variables). 
+
+### STAN
+
+Similarly, we could do the stan version:
+
+```{r, echo=FALSE}
+# Stan --------------------------------------------------------------------
+
+stan_code <- "
+data {
+  int<lower=0> N;   // number of obsevations
+  int<lower=0> K;   // number of predictors
+  matrix[N, K] x;   // predictor matrix
+  vector[N] y;      // outcome
+  vector[K] mb;     // prior means for coefficients
+  vector[K] sb;     // prior sds for coefficients
+  real lambda;      // prior rate for outcome sd
+}
+parameters {
+  vector[K] beta;       // coefficients
+  real<lower=0> sigma;  // outcome sd
+}
+model {
+  sigma ~ exponential(lambda); // prior sigma
+  beta ~ normal(mb, sb); // prior beta
+  y ~ normal(x * beta, sigma);  // likelihood
+}
+  "
+
+library(rstan)
+
+m.stan <- stan(model_code = stan_code,
+               iter = nsim,
+               data = list(x = x.scale, y = y.scale,
+                           N = nrow(x),
+                           K = ncol(x),
+                           lambda = 1,
+                           mb = rep(0, ncol(x)),
+                           sb = c(1000, rep(0.02, ncol(x)-1))))
+```
+
+
+```{r}
+stan.means <- apply(as.data.frame(m.stan), 2, mean)[-c(1,20,21)]
+stan.means <- rescale(stan.means)
+stan.means
+```
+
+### QUAP() from the textbook
+
+Finally, the textbook has a fancy function called \texttt{quap()}, to approximate the posterior distributions under regression settings. We repeat the similar analysis:
+
+```{r}
+# Quadratic Approximation -------------------------------------------------
+# using quadratic approximation (your book)
+model.quap <- quap(flist = alist(
+  y ~ dnorm(mu, sigma),
+  mu <- alpha + x %*% beta,
+  alpha ~ dnorm(0, 1000),
+  beta ~ dnorm(0, 0.02),
+  sigma ~ dexp(1)),
+  data = list(x = x.scale[,-1],
+              y = y.scale),
+  start = list(beta = rep(0,ncol(x)-1)))
+# transform back
+quap.coef <- coef(model.quap)[-c(19, 20)]
+quap.coef <- rescale(quap.coef)
+quap.coef
+```
+
+## Ridge regression and Bayesian linear regression
+
+Let's think about frequentist linear regression model for a moment. The ordinary least squares estimate of a linear model can be reframed as an optimization problem: 
+
+$$
+\hat{\beta}=\underset{\beta}{\operatorname{argmin}}(y-X \beta)^{T}(y-X \beta) .
+$$
+
+As a remedy to model overfitting problems, ridge regression is a commonly used regularization method that tends to reduce the magnitude of each predictor variable in the model. To do ridge regression, we simply add an extra penalty term $\lambda\|\beta\|_{2}^{2}$ that penalizes the Euclidean norm of the vector of coefficient. Here $\lambda$ is a hyperparameter (a different 'hyperparameter' than the one in Bayesian statistics as there is no prior here) that controls how much you want to penalize the vector of coefficients. 
+
+$$
+\hat{\beta}=\underset{\beta}{\operatorname{argmin}}(y-X \beta)^{T}(y-X \beta)+\lambda\|\beta\|_{2}^{2},
+$$
+
+There is a Bayesian interpretation to the ridge regression framework: for a Bayesian linear regression model with fixed residual variance $\sigma^2$ and independent Gaussian prior $\mathcal{N}(0, \tau^2 \mathbf{I}_q)$ on the regression coefficients $\boldsymbol{\beta}$, the posterior mode for $\boldsymbol{\beta}$, $p(\boldsymbol{\beta} \mid \mathbf{X}, \sigma^2, \tau^2)$ corresponds to the ridge regression estimate with $\lambda=\frac{\sigma^{2}}{\tau^{2}}$. We won't get into the reasoning behind this, but you can refer to here for more detail: https://statisticaloddsandends.wordpress.com/2018/12/29/bayesian-interpretation-of-ridge-regression/. 
+
+We will first fit the ridge regression estimates using functions in package \texttt{glmnet}. A couple of things to notice:
+
+- 'alpha = 0' means we are doing the ridge regression (unrelated to today's material, but if you set alpha to be 1, we get lasso instead).
+- Since the model we are considering is a little different from the setting above, we will not be getting exactly the same estimates(also, we are actually using posterior mean instead of posterior mode), but they should be similar.
+- We will also be computing estimates without penalizing to show the difference between these estimates. 
+
+``` {r}
+# OLS and Ridge -----------------------------------------------------------
+
+
+# fit Ridge for comparison
+gl.out <- glmnet(x = x.scale[,-1], y = y.scale, standardize = F, intercept = T, alpha = 0, lambda = 0.45)
+gl.coef <- coef(gl.out)[-1]
+
+# transform back to original scale
+gl.coef <- rescale(gl.coef)
+gl.coef
+
+
+# fit lm for comparison
+lm.coef <- coef(lm(price ~ ., data = df))[-1]
+
+# compare estimates
+round(cbind(`lm (not regularized)` = lm.coef,
+      jags = post.means,
+      stan = stan.means,
+      quap = quap.coef,
+      glmnet = gl.coef),3)
+
+```
+
+# Conclusion
+
+- Bayesian linear regression can be viewed as a regularization method
+- Some concluding remarks on covariate standardizing: centering and rescaling (1) helps sampling and (2) helps choosing priors:
+  - In ridge regression we standardize the covariates and give them the same 'penalty term', for the Bayesian equivalent, instead of doing the penalty term we place a tight prior with large precision around zero for all of the variables
+  - For the 'common penalty' (in terms of the tight prior) to make sense, we need to do the standardization

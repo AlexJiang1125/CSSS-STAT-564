@@ -1,0 +1,17 @@
+base
+methods
+datasets
+utils
+grDevices
+graphics
+stats
+coda
+rjags
+StanHeaders
+ggplot2
+rstan
+Matrix
+glmnet
+cmdstanr
+parallel
+rethinking

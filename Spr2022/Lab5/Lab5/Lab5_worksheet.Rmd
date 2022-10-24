@@ -1,0 +1,238 @@
+---
+title: "Lab 5 (worksheet version)"
+output: html_notebook
+---
+
+# 8H5
+
+Consider the data \texttt{(Wines2012)} data table. These data are expert ratings of 20 different French and American wines by 9 different French and American judges. Your goal is to model score, the subjective rating assigned by each judge to each wine. I recommend standardizing it. In this problem, consider only variation among judges and wines. Construct index variables of judge and wine and then use these index variables to construct a linear regression model. Justify your priors. You should end up with 9 judge parameters and 20 wine parameters. How do you interpret the variation among individual judges and individual wines? Do you notice any patterns, just by plotting the differences? Which judges gave the highest/lowest ratings? Which wines were rated worst/best on average?
+
+## Index Model 
+
+\begin{align*}
+s_i &\sim N(\mu_i, \sigma^2) \\
+\mu_i &= \alpha_{\text{JID}[i]} + w_{\text{WID}[i]} \\
+\alpha_{\text{JID}[i]} &\sim N(0,0.5^2) \\
+\beta_{\text{WID}[i]} &\sim N(0,0.5^2) \\
+\sigma & \sim \text{Exp}(1)
+\end{align*}
+
+### preparing data 
+
+```{r}
+dat_list <- list(
+    S = standardize(d$score), # standardize the data 
+    jid = as.integer(d$judge), # group by judge
+    wid = as.integer(d$wine) # group by wine
+)
+# have a look at the ids
+str(dat_list)
+```
+
+### quap() code
+
+```{r}
+m1 <- quap(
+    alist(
+      # likelihood: score distributed as normal, mean is mu, std is sigma
+      
+      # mean function: mean broken into two groups, judge effect(a) and wine effect(w)
+      # indexed by their ids
+      
+      # priors
+      
+      
+      
+    
+    ), 
+    # data 
+    data=dat_list
+    )
+```
+
+### rjags() code 
+
+```{r}
+m1_code <- "
+  \\ the data object we read in will also be here 
+  data {
+    D <- dim(S)
+    n <- D[1]
+  }
+  model{
+  # in JAGS we tend to specify everything iteratively
+  # likelihood
+   for(i in 1:n){
+      # response
+      
+      # bracket notation
+      # mean function
+      
+      # posterior predictive
+      # ynew[i] ~ dnorm(mu[i], tau)
+   }
+    # priors 
+    # beware of the precision specification
+    for (j in 1:Jid) {
+    
+    }
+    for (j in 1:Wid) {
+    
+    }
+    sigma ~ dexp(lambda)
+    tau <- pow(sigma, -2)
+  }
+"
+m8.5.jags <- jags.model(
+  file = textConnection(m1_code),
+  data = list(
+    S = 
+    jid = 
+    wid = 
+    Jid = 
+    Wid = 
+    ma = 
+    sa = 
+    mb = 
+    sb = 
+    lambda = 1
+  )
+)
+```
+
+#### view results
+
+```{r}
+m8.5.samps <- coda.samples(m8.5.jags,
+                           variable.names = c("a", "b"),
+                           n.iter = 1e4)
+m8.5.samps.df <- as.data.frame(m8.5.samps[[1]])
+plot(precis(m8.3.samps.df, depth = 2))
+```
+
+### STAN code 
+
+```{r}
+library(rstan)
+model_code <- "
+  data{
+    // data 
+    int<lower=1> N; // number of observations
+    vector[N] S; // obsrevations
+    
+    // grouping factors
+     // number of judge ids
+     // judge ids
+     // number of judge ids
+     // judge ids
+    
+    // hyperparameters: feed in the values
+    real ma;
+    real mb;
+    real sa;
+    real sb;
+    real lambda;
+  }
+  // important! for parameters you want to set their ranges
+  parameters{
+    vector[Jid] a; // judge effect
+    vector[Wid] b; // wine effect
+    real<lower=0> sigma;
+  }
+  model{
+    // declare variable for the expected outcome
+    // important! mu is a local variable
+    // in stan we need to put mu in the model, instead of the parameter
+    vector[N] mu; 
+    // priors
+    a ~ normal(ma, sa);
+    b ~ normal(mb, sb);
+    sigma ~ exponential(lambda);
+    // likelihood
+    for (i in 1:N) {
+      mu[i] = a[jid[i]] + b[wid[i]];
+    }
+    S ~ normal(mu, sigma);
+  }
+"
+stan.out <- stan(
+  model_code = model_code,
+  iter = 1e4, # length of the markov chain
+  data = list(
+    N = length(dat_list$S),
+    S = dat_list$S,
+    Jid = max(dat_list$jid),
+    jid = dat_list$jid,
+    Wid = max(dat_list$wid),
+    wid = dat_list$wid,
+    ma = 0,
+    sa = 0.5,
+    mb = 0,
+    sb = 0.5,
+    lambda = 1
+  )
+)
+print(stan.out)
+stan_plot(stan.out, pars = c("a", "b"))
+```
+## Model Matrix 
+
+Equivalently we can re-express this model in matrix form. Suppose we group the 'wine effects' and the 'judge effects' in to vectors: $\boldsymbol{\alpha} = (\alpha_1, ..., \alpha_9)^T$, $\boldsymbol{\beta} = (\beta_1, ..., \beta_{20})^T$. And then we build two model matrix, $\mathbf{X_{\alpha}}_{n \times 20}, \mathbf{X_{\beta}}_{n \times 9}$ that indicates the allocation of each data row: 
+
+\begin{align*}
+\mathbf{X_{\alpha}}_{i,j} = 1, \text{ if the i-th score is given by judge $j$, o.w. $\mathbf{X_{\alpha}}_{i,j} = 0$}
+\end{align*}
+
+The same goes for $\mathbf{X_{\beta}}$. 
+
+### Preparing the data 
+
+```{r}
+dat_x <- data.frame(
+  score = standardize(d$score),
+  judge = (d$judge),
+  wine = (d$wine)
+)
+# making the model matrix
+x <- model.matrix(~ -1 + judge + wine,
+                  data = dat_x,
+                  contrasts.arg = list(wine = contrasts(d$wine, contrasts = FALSE)))
+# view the data
+x[1,]
+dat_x[1,]
+# break into two matrices
+x1 <- x[,1:9]
+x2 <- x[,10:29]
+```
+
+
+```{r}
+m1_x <- quap(
+    alist(
+      # likelihood: score distributed as normal, mean is mu, std is sigma
+        S ~ dnorm( mu , sigma ),
+      # mean function: mean broken into two groups, judge effect(a) and wine effect(w)
+      # indexed by their ids
+      # quap adopts the matrix multiplication operator in R
+        mu <- 
+      # priors
+        a ~ dnorm(0,0.5),
+        b ~ dnorm(0,0.5),
+        sigma ~ dexp(1)
+    ), 
+    # data 
+    data=list(
+      x1 = x1,
+      x2 = x2,
+      S = standardize(d$score)
+    ),
+    # important: in previous code we do not specify the length of a and b
+    # a trick we saw in the splines code is to use start()
+    # length of vector a is just columns of Xa
+    start=list(
+      #a = 
+      #b = 
+    )
+)
+plot( precis( m1_x , 2 ) )
+```

@@ -1,0 +1,447 @@
+---
+title: |-
+  2022 SISG Bayesian Statistics for Genetics 
+  R Notes: Multinomial and Poisson Count Data 
+author: "| Jon Wakefield \n| Departments of Statistics and Biostatistics\n| University
+  of Washington\n"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  ioslides_presentation: default
+  slidy_presentation: default
+  html_document: default
+---
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+opts_chunk$set(collapse=TRUE, fig.align='center', tidy=TRUE, tidy.opts=list(blank=TRUE, width.cutoff=40), warning=FALSE,message=FALSE,cache=TRUE)
+```
+
+# Poisson Data
+
+## AIDS Data
+
+Whyte et al. (1987) reported deaths due to AIDS in Australian 3-month periods from January 1983 to June 1986.
+
+We illustrate Bayesian modeling of these count data using a very simple loglinear model:
+\begin{eqnarray*}
+Y_i | \mu_i &\sim& \mbox{Poisson}(\mu_i)\\
+\log \mu_i &=& \beta_0 + \beta_1 \log (\mbox{time}_i)
+\end{eqnarray*}
+
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+library(brinla)
+library(dplyr)
+library(tidyr)
+# Plot the data
+data(AIDS, package = "brinla")
+head(AIDS,n=3)
+```
+
+
+```{r, message=FALSE, collapse=TRUE,echo=FALSE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+plot(DEATHS ~ TIME, data=AIDS, ylim=c(0,60))
+```
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+# frequentist method 
+AIDS.glm1 <- glm(DEATHS ~ log(TIME), family=poisson(), data=AIDS) 
+# summary(AIDS.glm1)
+round(coef(summary(AIDS.glm1)), 4)
+```
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+# INLA method
+AIDS.inla1 <- inla(DEATHS ~ log(TIME), data = AIDS, family = "poisson", control.predictor=list(compute=TRUE)) 
+# Output Posterior Estimates
+round(AIDS.inla1$summary.fixed[,1:5], 4)
+```
+
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+# Plot the results
+plot(DEATHS ~ log(TIME), data=AIDS, ylim=c(0,60))
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$mean, lwd=2,col="red")
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$"0.025quant", lwd=1, lty=2,col="blue")
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$"0.975quant", lwd=1, lty=2,col="blue")
+```
+
+
+```{r, message=FALSE, collapse=TRUE,echo=FALSE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+# Plot the results
+plot(DEATHS ~ log(TIME), data=AIDS, ylim=c(0,60))
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$mean, lwd=2,col="red")
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$"0.025quant", lwd=1, lty=2,col="blue")
+lines(log(AIDS$TIME), AIDS.inla1$summary.fitted.values$"0.975quant", lwd=1, lty=2,col="blue")
+```
+
+## AIDS Data: Overdispersion?
+
+The Poisson model is restrictive so we allow for excess-Poisson variation.
+\vspace{.2in}
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+# frequentist method 
+AIDS.glmq <- glm(DEATHS ~ log(TIME), family=quasipoisson(), data=AIDS) 
+# summary(AIDS.glmq)
+round(coef(summary(AIDS.glmq)), 4)
+# Compare with Poisson:
+round(coef(summary(AIDS.glm1)), 4)
+```
+
+\vspace{.1in}
+\normalsize
+Overdispersion is estimated as 1.33 and so standard errors are $\sqrt{1.33}=1.15$ larger in quasipoisson analysis.
+
+
+We fit a negative binomial model using frequentist likelihood inference.
+\vspace{.2in}
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+library(MASS)
+AIDS.glm2 <- glm.nb(DEATHS ~ log(TIME),  data=AIDS) 
+round(coef(summary(AIDS.glm2)), 4)
+```
+
+Now fit the negative binomial model using INLA.
+\vspace{.2in}
+
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+AIDS.inla2 <- inla(DEATHS ~ log(TIME), data = AIDS, family = "nbinomial", control.predictor=list(compute=TRUE)) 
+# Output Posterior Estimates
+round(AIDS.inla2$summary.fixed[,1:5], 4)
+round(AIDS.inla2$summary.hyperpar[,1:5], 4)
+```
+
+```{r, message=FALSE, collapse=TRUE,echo=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show="hide"}
+# Plot the results
+plot(DEATHS ~ log(TIME), data = AIDS, ylim=c(0,60))
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$mean, lwd=2,col="red")
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$"0.025quant", lwd=1, lty=2,col="blue")
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$"0.975quant", lwd=1, lty=2,col="blue")
+```
+
+
+```{r, message=FALSE, collapse=TRUE,echo=FALSE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+# Plot the results
+plot(DEATHS ~ log(TIME), data = AIDS, ylim=c(0,60))
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$mean, lwd=2,col="red")
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$"0.025quant", lwd=1, lty=2,col="blue")
+lines(log(AIDS$TIME), AIDS.inla2$summary.fitted.values$"0.975quant", lwd=1, lty=2,col="blue")
+```
+
+
+# Multinomial Data
+
+## Hardy-Weinberg via Fisher's exact test
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+library(hwde)
+n1 <- 88
+n2 <- 10
+n3 <- 2
+exact <- hwexact(n1,n2,n3)
+exact
+```
+We obtain a p-value of `r round(exact,2)`
+
+## Displaying samples from a Dirichlet(1,1,1)
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+library(VGAM) # To access the rdiric function
+nsim <- 50000
+q <- rdiric(nsim,c(1,1,1))
+#
+# Univariate marginal representations
+#
+par(mfrow=c(1,3))
+hist(q[,1],xlab=expression(q[1]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+hist(q[,2],xlab=expression(q[2]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+hist(q[,3],xlab=expression(q[3]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+#
+# Bivariate representations
+#
+plot(q[,1],q[,2],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[1]),
+     ylab=expression(q[2]),cex.lab=1.5)
+plot(q[,1],q[,3],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[1]),
+     ylab=expression(q[3]),cex.lab=1.5)
+plot(q[,2],q[,3],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[2]),
+     ylab=expression(q[3]),cex.lab=1.5)
+```
+
+## Histograms
+
+
+```{r, message=FALSE, collapse=TRUE,echo=FALSE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+library(VGAM) # To access the rdiric function
+par(mfrow=c(1,3))
+hist(q[,1],xlab=expression(q[1]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+hist(q[,2],xlab=expression(q[2]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+hist(q[,3],xlab=expression(q[3]),main="",cex.lab=1.5,xlim=c(0,1),col="red")
+```
+
+## Scatteplots
+
+
+```{r, message=FALSE, collapse=TRUE,echo=FALSE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+par(mfrow=c(1,3))
+plot(q[,1],q[,2],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[1]),
+     ylab=expression(q[2]),cex.lab=1.5,col="grey")
+plot(q[,1],q[,3],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[1]),
+     ylab=expression(q[3]),cex.lab=1.5,col="grey")
+plot(q[,2],q[,3],xlim=c(0,1),ylim=c(0,1),xlab=expression(q[2]),
+     ylab=expression(q[3]),cex.lab=1.5,col="grey")
+```
+
+## Displaying samples from Dirichlets
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+library(hexbin)
+library(ggplot2)
+nsim <- 50000
+ex1 <- ex2 <- NULL
+ex1[1] <- ex1[2] <- ex1[3] <- 5
+qex1 <- rdiric(nsim,ex1)
+ex2[1] <- 6; ex2[2] <- 4; ex2[3] <- 1
+qex2 <- rdiric(nsim,ex2)
+# See https://www.r-graph-gallery.com/2d-density-plot-with-ggplot2.html
+```
+
+## Displaying samples from a Dirichlet(5,5,5)
+
+
+```{r, message=FALSE, collapse=TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+ggplot(data.frame(qex1[,1],qex1[,2]),aes(x=qex1[,1],y=qex1[,2]))+geom_hex(bins=30)+scale_fill_continuous(type="viridis")+theme_bw()+xlab(expression(q[1]))+ylab(expression(q[2]))+ lims(x=c(0,1),y=c(0,1))
+```
+
+## Displaying samples from a Dirichlet(6,4,1)
+
+
+```{r, message=FALSE, collapse=TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+ggplot(data.frame(qex2[,1],qex2[,2]),aes(x=qex2[,1],y=qex2[,2]))+geom_hex(bins=30)+scale_fill_continuous(type="viridis")+theme_bw()+xlab(expression(q[1]))+ylab(expression(q[2])) + lims(x=c(0,1),y=c(0,1))
+```
+
+
+## Displaying samples from a Dirichlet(6,4,1)
+
+
+```{r, message=FALSE, collapse=TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=50)}
+ggplot(data.frame(qex2[,1],qex2[,2]),aes(x=qex2[,1],y=qex2[,2]))+stat_density_2d(aes(fill=..density..),geom="raster",contour = FALSE) + scale_fill_distiller(palette="Spectral", direction=-1) + scale_x_continuous(expand=c(0,0))+ scale_y_continuous(expand=c(0,0)) + xlab(expression(q[1]))+ylab(expression(q[2]))
+```
+
+
+## Functions of interest: implied priors
+
+We assume a ``dirichlet(1,1,1)``` distribution
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+q1 <- q[,1]
+q2 <- q[,2]
+q3 <- q[,3]
+p1 <- q1+q2/2
+p2 <- q3+q2/2; 
+f <- (q1-p1^2)/(p1*p2)
+D <- q1-p1^2
+psi <- q2^2/(p1*p2)
+## Functions of interest
+cat("Prior prob f>0: ",sum(f>0)/nsim,"\n")
+cat("Prior prob D>0: ",sum(D>0)/nsim,"\n")
+```
+
+Examine prior summaries for different functions of interest.
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+par(mfrow=c(1,3))
+hist(p1,main="",xlab=expression(p[1]),cex.lab=1.5)
+hist(p2,main="",xlab=expression(p[2]),cex.lab=1.5)
+hist(D,main="",xlab=expression(D),cex.lab=1.5)
+par(mfrow=c(1,2))
+hist(f,main="",xlab="f",cex.lab=1.5)
+hist(psi,main="",xlab=expression(psi),cex.lab=1.5)
+```
+
+## Functions of interest: priors on $p_1,p_2,D$
+
+
+```{r, collapse=TRUE,tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(1,3))
+hist(p1,main="",xlab=expression(p[1]),cex.lab=1.5,col="purple")
+hist(p2,main="",xlab=expression(p[2]),cex.lab=1.5,col="purple")
+hist(D,main="",xlab=expression(D),cex.lab=1.5,col="purple")
+```
+
+## Functions of interest: priors on $f,\psi$.
+
+
+```{r, collapse=TRUE,tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(1,2))
+hist(f,main="",xlab="f",cex.lab=1.5,col="lightblue")
+hist(psi,main="",xlab=expression(psi),cex.lab=1.5,col="lightblue")
+```
+
+## Prior on $f$ and $q_1$
+
+
+```{r, echo=TRUE, collapse=TRUE,tidy.opts=list(width.cutoff=50),echo=FALSE}
+ggplot(data.frame(q1,f),aes(x=q1,y=f))+stat_density_2d(aes(fill=..density..),geom="raster",contour = FALSE) + scale_fill_distiller(palette="Spectral", direction=-1) + scale_x_continuous(expand=c(0,0))+ scale_y_continuous(expand=c(0,0)) + xlab(expression(q[1]))+ylab(expression(f))
+```
+
+
+
+```{r, echo=TRUE, collapse=TRUE,tidy.opts=list(width.cutoff=50),echo=FALSE}
+ggplot(data.frame(p1,f),aes(x=p1,y=f))+stat_density_2d(aes(fill=..density..),geom="raster",contour = FALSE) + scale_fill_distiller(palette="Spectral", direction=-1) + scale_x_continuous(expand=c(0,0))+ scale_y_continuous(expand=c(0,0)) + xlab(expression(q[1]))+ylab(expression(f))
+```
+
+
+
+## Bayes analysis of (88,10,2) data
+
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+n1 <- 88; n2 <- 10; n3 <- 2
+p1 <- 88/100 + 0.5*10/100 # Estimated allele frequencies
+p2 <- 2/100 + 0.5*10/100  # for A1 and A2
+v1 <- v2 <- v3 <- 1
+q <- rdiric(nsim,c(n1+v1,n2+v2,n3+v3)) # The posterior
+q1 <- q[,1]; q2 <- q[,2]; q3 <- q[,3]
+par(mfrow=c(1,3))
+hist(q1,xlab=expression(q[1]),
+    main=expression(paste("Posterior for ",q[1])))
+abline(v=n1/(n1+n2+n3),col="red")
+abline(v=p1^2,col="blue")
+hist(q2,xlab=expression(q[2]),
+    main=expression(paste("Posterior for ",q[2])))
+abline(v=n2/(n1+n2+n3),col="red")
+abline(v=2*p1*p2,col="blue")
+hist(q3,xlab=expression(q[3]),
+    main=expression(paste("Posterior for ",q[3])))
+abline(v=n3/(n1+n2+n3),col="red")
+abline(v=p2^2,col="blue")
+```
+
+
+Univariate posterior distributions: blue lines are the MLEs in the full model, red lines under the HWE model
+
+
+```{r, echo=TRUE, collapse=TRUE, tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(2,3))
+hist(q1,xlab=expression(q[1]),
+    main=expression(paste("Posterior for ",q[1])))
+abline(v=n1/(n1+n2+n3),col="red")
+abline(v=p1^2,col="blue")
+hist(q2,xlab=expression(q[2]),
+    main=expression(paste("Posterior for ",q[2])))
+abline(v=n2/(n1+n2+n3),col="red")
+abline(v=2*p1*p2,col="blue")
+hist(q3,xlab=expression(q[3]),
+    main=expression(paste("Posterior for ",q[3])))
+abline(v=n3/(n1+n2+n3),col="red")
+abline(v=p2^2,col="blue")
+```
+
+
+```{r, message=FALSE, collapse=TRUE, tidy=TRUE,tidy.opts=list(width.cutoff=50),fig.show='hide'}
+par(mfrow=c(1,3))
+plot(q2~q1,xlab=expression(q[1]),ylab=expression(q[2]),
+    col="grey")
+points(n1/(n1+n2+n3),n2/(n1+n2+n3),col="red",pch=20,cex=2)
+points(p1^2,2*p1*p2,col="blue",pch=4,cex=2)
+legend("topright",legend=c("MLE","HWE"),col=c("red","blue"),
+       pch=c(20,20),bty="n")
+plot(q3~q1,xlab=expression(q[1]),ylab=expression(q[3]),
+    col="grey")
+points(n1/(n1+n2+n3),n3/(n1+n2+n3),col="red",pch=20,cex=2)
+points(p1^2,p2^2,col="blue",pch=4,cex=2)
+plot(q3~q2,xlab=expression(q[2]),ylab=expression(q[3]),
+    col="grey")
+points(n2/(n1+n2+n3),n3/(n1+n2+n3),col="red",pch=20,cex=2)
+points(2*p1*p2,p2^2,col="blue",pch=4,cex=2)
+```
+
+Bivariate posterior distributions: blue lines are the MLEs in the full model, red lines under the HWE model
+
+
+```{r, echo=TRUE, collapse=TRUE, tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(1,3))
+plot(q2~q1,xlab=expression(q[1]),ylab=expression(q[2]),
+    col="grey")
+points(n1/(n1+n2+n3),n2/(n1+n2+n3),col="red",pch=20,cex=2)
+points(p1^2,2*p1*p2,col="blue",pch=4,cex=2)
+legend("topright",legend=c("MLE","HWE"),col=c("red","blue"),
+       pch=c(20,20),bty="n")
+plot(q3~q1,xlab=expression(q[1]),ylab=expression(q[3]),
+    col="grey")
+points(n1/(n1+n2+n3),n3/(n1+n2+n3),col="red",pch=20,cex=2)
+points(p1^2,p2^2,col="blue",pch=4,cex=2)
+plot(q3~q2,xlab=expression(q[2]),ylab=expression(q[3]),
+    col="grey")
+points(n2/(n1+n2+n3),n3/(n1+n2+n3),col="red",pch=20,cex=2)
+points(2*p1*p2,p2^2,col="blue",pch=4,cex=2)
+```
+
+
+
+## Inference for $f$
+
+The MLE is $\hat{f}=0.23$ with asymptotic standard error 0.17.
+
+Hence, a 95\% asymptotic confidence interval is 
+$$(0.23-1.96 \times 0.17,0.23+1.96 \times 0.17)=(-0.1032,0.5632).$$
+
+## Posterior summaries
+
+
+```{r, collapse=TRUE,tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(1,3))
+p1 <- q1+q2/2; p2 <- q3+q2/2; 
+f <- (q1-p1^2)/(p1*p2); D <- q1-p1^2; psi <- q2^2/(p1*p2)
+hist(p1,main="",xlab=expression(p[1]),cex.lab=1.5)
+hist(p2,main="",xlab=expression(p[2]),cex.lab=1.5)
+hist(D,main="",xlab=expression(D),cex.lab=1.5)
+```
+
+
+
+```{r, echo=TRUE, collapse=TRUE, tidy.opts=list(width.cutoff=50),echo=FALSE}
+par(mfrow=c(1,2))
+hist(f,main="",xlab="f",cex.lab=1.5)
+hist(psi,main="",xlab=expression(psi),cex.lab=1.5)
+```
+
+
+## Bayes factor
+
+
+```{r, echo=TRUE, collapse=TRUE, tidy.opts=list(width.cutoff=50)}
+# Need devtools()
+devtools::install_github("cran/HWEBayes")
+library(HWEBayes)
+bvec0 <- c(1,1)
+bvec1 <- c(1,1,1)
+nvec <- c(88,10,2)
+PrnH0 <- DirichNormHWE(nvec,bvec0)
+PrnH1sat <- DirichNormSat(nvec,bvec1)
+BFH0H1sat <- PrnH0/PrnH1sat
+cat("H0 norm = ",PrnH0,"\n")
+cat("H1 (sat) norm = ",PrnH1sat,"\n")
+cat("Bayes factor in favor of the null = ",BFH0H1sat,"\n")
+```
+
+## Exercises
+
+* Repeat the analyses in these notes for the Lidicker et al data discussed in class, ie with $n_1=37$, $n_2=20$, $n_3=7$. In particular,
+
+   + With a Dirichlet(1,1,1) prior on the 3 probabilities, generate samples, and examine the various summaries, including marginal allele frequencies and the inbreeding coefficient $f$
+   
+   + Evaluate the Bayes factor comparing HWE with the saturated alternative
+   
+
+ 
+  

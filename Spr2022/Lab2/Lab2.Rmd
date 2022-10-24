@@ -1,0 +1,139 @@
+---
+title: "Lab 2"
+author: "Alex Ziyu Jiang"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_notebook: default
+---
+
+# Bayesian Binomial Models
+
+In lecture we looked at a Bayesian binomial model on a dataset about labor market data. Today we look at its use on a different dataset. First, we download the package for the dataset:
+
+```{r}
+# install.packages("devtools") # run it for the first time
+devtools::install_github("carloscinelli/generalizing")
+```
+
+## The dataset 
+
+Here we will be looking into three experiments that were designed to study the effects of vitamin A supplementation on childhood mortality. Three trials were carried outt in Aceh, West Java and Sarlahi. Based on scientific background, Vitamin A reduces childhood mortality by reducing the incidence, severity or duration of life-threatening diseases such as measles and diarrhea. We focus on the following measures:
+
+- The outcome of the trial: Survival and death during the trial.
+- The treatments: Treatment group if assigned vitamin A; control if assigned placebo.
+
+\begin{figure*}
+  \centering
+	\includegraphics[width = \linewidth]{table.png}
+\end{figure*}
+
+## The model 
+
+We are interested to study the contrast of survival rates between treatment and control groups and we can build a Bayesian model to study the differences. We denote $P_1$ as the survival rate in the treatment group, we further assume that the death of each subject in the treatment group is independent of each other and identical with probability $1-P_1$ (which is the mortality rate). Suppose the total number of participants in the treatment group is $N_1$, the number of participants survived is $n_1$ (for the Aceh case, it will be $N_1 = 12,991, n_1 = 12,890$). Thus we can build a **binomial model** to characterize the number of participants surviving, in the treatment group:
+
+\begin{align*}
+n_1 &\sim \text{Binom}(N_1,P_1) 
+\end{align*}
+
+We can do the similar thing for the control group and have the following model:
+
+\begin{align*}
+n_1 &\sim \text{Binom}(N_1, P_1) \\
+n_0 &\sim \text{Binom}(N_0, P_0) 
+\end{align*}
+
+Additionally, we should notice that $P_0, P_1$ are unknown values so we need to place priors on it in order to make it a Bayesian model. Keep in mind that they are essentially probabilities between zero and one, so it would make sense to give them a uniform prior on $[0,1]$, without extra prior information. 
+
+## The inference goal
+
+There are a couple of quantities of interest that we would want to conduct inference on from this model. Obviously we want to look at the posterior distribution of $P_0, P_1$, the survival rates for the treatment and the control group, and we would also want to look at the **risk difference** $RD = (1-P_1) - (1-P_0) = P_0 - P_1$, the **risk ratio** $RR = \frac{1 - P_1}{1 - P_0}$, the **survival ratio** $1 - \frac{1 - P_1}{1 - P_0}$. The survival ratio can be interpreted as the percentage of children that were saved due to vitamin A supplementation.
+
+## The Jags implementation
+
+```{r, warning=FALSE, message=FALSE}
+library(rjags)
+library(rethinking)
+library(generalizing)
+library(rstan)
+# install.packages("devtools")
+data("Aceh")
+# JAGS code
+model_code <- "
+  model{
+    # likelihood
+    n1 ~ dbinom(P1, N1)
+    n0 ~ dbinom(P0, N0)
+    # prior
+    P1 ~ dunif(0, 1)
+    P0 ~ dunif(0, 1)
+    # transformed quantities
+    rd <- P0 - P1
+    rr <- (1-P1)/(1-P0)
+    sr <- (P1-P0)/(1-P0)
+    nrd <- P1 - P0
+  }
+"
+# compile jags model
+model <- jags.model(file = textConnection(model_code),
+                    data = Aceh)
+samples <- coda.samples(model,
+                        variable.names = c("P1", "P0", "rd", "rr", "sr", "nrd"),
+                        n.iter = 1e4)
+samples <- as.data.frame(samples[[1]])
+precis(samples, digits = 10)
+```
+
+## Results
+
+We see that the posterior distribution for both $P_0, P_1$ are centered pretty close to 1, and we have a risk difference posterior that is centered very close to zero, and a risk ratio posterior that is centered around 1. It seemed like the treatment effect is very small, but this is probably due to the fact the baseline survival rate is already very high. However, the survival ratio gives us more information, with its posterior mean around 0.26. This gives us the information that treatment of vitamin A prevented about 26% of deaths that would have otherwise occurred. 
+
+
+## STAN code 
+
+Similarly, we can repeat the analysis in STAN. We can see from the results that they are very similar to each other.
+
+```{r, echo=FALSE}
+library(rstan)
+model_code <- "
+  data{
+    int N1;
+    int n1;
+    int N0;
+    int n0;
+  }
+  parameters{
+    real<lower=0,upper=1> P1;
+    real<lower=0,upper=1> P0;
+  }
+  model{
+    P1 ~ uniform( 0 , 1 );
+    P0 ~ uniform( 0 , 1 );
+    n1 ~ binomial( N1 , P1);
+    n0 ~ binomial( N0 , P0);
+  }
+  generated quantities{
+    real rd;
+    real rr;
+    real sr;
+    rd = P0 - P1;
+    rr = (1-P1)/(1-P0);
+    sr = (P1 - P0)/(1 - P0);
+  }
+"
+library(rstan)
+stan.out <- stan(model_code = model_code, iter = 1e4,
+                 data = as.list(Aceh))
+print(stan.out)
+stan_plot(stan.out)
+```
+
+
+# In class exercise 
+
+Aside from the "Aceh" trial, there are also two other ones being carried out. Try replacing "Aceh" with "Sarlahi" and "Sarlahi" to see if the results will be different. 
+
+# References
+
+Cinelli C, Pearl J. Generalizing experimental results by leveraging knowledge of mechanisms. Eur J Epidemiol. 2021 Feb;36(2):149-164. doi: 10.1007/s10654-020-00687-4. Epub 2020 Oct 18. PMID: 33070298.
+

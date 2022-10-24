@@ -1,0 +1,341 @@
+---
+title: "Lab 9"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+```{r setup}
+library(rstan)
+library(rstanarm)
+library(tidyverse)
+library(bayesplot)
+library(rethinking)
+library(loo)
+```
+
+
+# Models 
+
+## Warmup on GLMs
+
+GLMs use link functions to connect non-continuous outcomes to linear predictors. Consider the linear model: 
+
+
+$$
+y_i \sim N(\alpha + \beta x_i, \sigma), \mu_i = \alpha + \beta x_i
+$$
+
+We see that $\mu_i$, which we also call the **linear predictor**, is a linear combination of the covariates (in this case, just one covariate) $\alpha + \beta x_i$, and is the expected value of the outcome $y_i$: 
+
+$$
+E[y_i \mid x_i] = \mu_i
+$$
+
+The reformulation above is interesting because it tells us the following information:
+
+- Using this model, we are expecting a linear relationship between **predictors** ($x_i$) and the **expected value** ($E[y_i \mid x_i]$)
+- An `implied' assumption about the model is that $y_i$ should be a continuos variable on the **whole real line**. This is justified by the relationship between the linear predictor $\mu_i$ and the expected outcome $E[y_i \mid x_i]$ above. 
+
+## The Poisson model
+
+The Poisson model is useful for modeling data that takes integer values. **Especially, data that does not have (a known) upper limit**. For a discrete distribution with support on the integer values $\{0,1,2,...\}$, the Poisson distribution seems like a really good choice. This gives us the incentive to use it to model integer data:
+
+$$
+y_{i} \sim \operatorname{Poisson}(\lambda_i), \lambda_i \text{`associated with'} x_i
+$$
+
+Here I use $\lambda_i$ because ultimately we want to fit a regression model. So it makes sense that the parameter of Poisson distribution is different for each $y_i$, and that is governed by difference in the covariate $x_i$. We then see how to characterize this association. 
+
+For Poisson distribution, a very important result is that the parameter $\lambda_i$ is the expected value of the outcome $y_i$ and also the expected variance of the counts $y_i$. i.e. 
+
+$$
+E[y_i \mid x_i] = \lambda_i, \lambda_i \text{`associated with'} x_i
+$$
+
+This is one step closer, but we still need to know how $\lambda_i$ gets associated with $x_i$. We already knew that $\lambda_i > 0$, but $x_i$ is unrestricted on the whole real line. So it makes sense to 'transform' $\lambda_i$ so that the transformed value is also on the whole real line. One thing we can do is to use the log function:
+
+$$
+\log \lambda_i = \alpha + \beta x_i 
+$$
+
+This completes our model. Note the relationship to the regular linear model, where the relationship between the linear predictor and the expected outcome is an identical functiom: 
+
+$$
+E[y_i \mid x_i] = \alpha + \beta x_i
+$$
+
+where, in our case, it is a log function. The log function here is also called **link function**. 
+
+$$
+\log(E[y_i \mid x_i]) = \alpha + \beta x_i
+$$
+
+There are a few things to notice here: 
+
+- The log link ensures that $\lambda_i$ is always positive, which is required of the expected value of a count outcome.
+- It also implies an exponential relationship between predictors and the expected value. (We need to justify such expoential relationship actually makes sense.)
+- The log function is not the only function that works as a link function for the Poisson model, but this is how people usually model count data as a common practice.
+- Finally, it also makes sense to center the linear predictor first: $\log(E[y_i \mid x_i]) = \alpha + (\beta x_i - \bar{x})$
+
+# Data 
+
+We then look at a data example. The data is adapted from Gelman and Hill(2007) and is about pest treatment for roaches in urban apartments. The dataset is used to study the efficacy of a certain pest management system at reducing the number of roaches in urban apartments. The treatment and control were applied to 160 and 104 apartments, respectively, and the outcome measurement in each apartment was the number of roaches caught in a set of traps. Different apartments had traps for different numbers of days.
+
+- `y`(the response variable): number of roaches caught
+- `roach1`(covariate): pre-treatment number of roaches
+- `treatment`(covariate): a binary variable indicating whether there is treatment
+- `senior`(covariate): a binary variable indicating whether the building is for senior residents
+- `exposure2`(offset variable): number of days for which traps were used (different for all apartments)
+
+The goal here is to model the number of roaches caught (technically the number of roaches caught per day) for each urban apartment, given the data we have. Some extra points to notice:
+
+- **rescaling data**: the original scale for `roach1` is very large so it needs rescaling due to reasons we covered before. Here what is done in the reference is that they divided the original figures by 100 -- we do the same thing here. 
+- **offset**: the traps were placed for different time periods, so it makes more sense to model the `capture rate' (i.e. counts divided by time), so we use this log-offset of exposure time length variable in the model, with coefficient fixed to 1. **You can think of offset as a variable in the regression function, but the coefficient is fixed to 1**.
+
+We load in the data here:
+
+```{r, cache = TRUE}
+data("roaches", package = "rstanarm")
+roaches <- as_tibble(roaches)
+glimpse(roaches)
+covariates <- 
+  roaches %>%
+  mutate(roach1 = roach1/100) %>% 
+  # mutate(roach1 = scale(roach1)[, 1]) %>% # this is an option too!
+  dplyr::select(roach1, treatment, senior) 
+
+d <- list(
+  y = roaches$y,
+  X = as.matrix(covariates),
+  offset = log(roaches$exposure2)
+)
+
+d$N <- length(d$y)
+d$K <- ncol(d$X)
+```
+
+The model has the following form: 
+
+\begin{align*}
+y_i &\sim \text{Poisson}(\lambda_i) \\
+\log(\lambda_i) &= \alpha + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_3 + \log(\text{Exposure}_i) \\
+\alpha &\sim N(0, 2.5), \beta_i \sim N(0, 10),i = 1,..,3
+\end{align*}
+
+We compile the model in stan. The major difference from what we have done before in the linear models is that here the linear predictor `lambda` is associated with the linear predictor `a + X * b + offset` through an exponential function:
+
+```{r}
+stan_code <- "
+data {
+  // number of observations
+  int N;
+  // response
+  int<lower = 0> y[N];
+  // number of covariates
+  int K;
+  // design matrix X 
+  matrix[N, K] X;
+  // an offset is a term with known coefficient 1
+  vector[N] offset; 
+}
+parameters {
+  real a;
+  // regression coefficient vector
+  vector[K] b;
+}
+transformed parameters {
+  vector<lower = 0> [N] lambda;
+  lambda = exp(a + X * b + offset);
+}
+model {
+  a ~ normal(0, 10);
+  b ~ normal(0, 2.5);
+  // likelihood
+  y ~ poisson(lambda);
+}
+generated quantities {
+  // simulate data from the posterior
+  vector[N] y_rep;
+  // log-likelihood posterior
+  vector[N] log_lik;
+  for (i in 1:N) {
+    y_rep[i] = poisson_rng(lambda[i]);
+    log_lik[i] = poisson_lpmf(y[i] | lambda[i]);
+  }
+}
+"
+
+fit_poisson <- stan(model_code = stan_code, data = d)
+print(fit_poisson, pars = c("a", "b"))
+plot(fit_poisson, pars = c("a", "b"))
+```
+
+
+We can also do this in jags! Note that sometimes jags does not support vectorization as well as stan, so we have to be a little careful and better write all iterations.
+
+```{r}
+rjags_code <- " data {
+  D <- dim(X)
+  N <- D[1] # number of observations
+  K <- D[2] # number of covariates 
+}
+model {
+  a ~ dnorm(0, pow(10,-2));
+  for (i in 1:K) {
+    b[i] ~ dnorm(0, pow(2.5,-2))
+  }
+  for (i in 1:N) {
+    lambda[i] = exp(a + X[i,] %*% b + offset[i])
+  }
+  # likelihood
+  for (i in 1:N) {
+    y[i] ~ dpois(lambda[i])
+    # posterior predictive
+    ynew[i] ~ dpois(lambda[i])
+  }
+}
+"
+library(rjags)
+fit_poisson_jags <- jags.model(file = textConnection(rjags_code), 
+                         data = list(
+                           X = d$X,
+                           y = d$y,
+                           offset = d$offset
+                         ))
+fit_poisson_jags_sampls <- coda.samples(fit_poisson_jags,
+                           variable.names = c("a", "b"),
+                           n.iter = 1e4)
+fit_poisson_jags_sampls_df <- as.data.frame(fit_poisson_jags_sampls[[1]])
+plot(precis(fit_poisson_jags_sampls_df, depth = 2))
+#print(fit_poisson, pars = c("a", "b"))
+#plot(fit_poisson, pars = c("a", "b"))
+```
+
+# A generalization of Poisson model - Negative Binomial 
+
+Now we look back again at the regression model we have been fitting. The poisson regression allows us to fit models to integer variables, but this is predicated on restriction of the Poisson distribution itself: Poisson distribution is a one-parameter distribution, so the flexibility we can achieve with it is very limited. Also, we know that $E[Y_i \mid X_i] = Var[Y_i \mid X_i] = \lambda_i$, which may not make much sense in some cases. 
+
+Negative binomial model allow us to relax the assumption by introducing an extra parameter.
+
+$$
+y_{i} \sim \operatorname{Neg-Bin}(\mu_i, \phi), \log \mu_i = \alpha + \beta x_i
+$$
+
+There are two parameters in the negative binomial distribution:
+- $\mu_i$ (location/mean parameter): similar to $\lambda_i$ in the Poisson regression model, $E[Y_i \mid X_i] = \mu_i$
+- $\phi$ (dispersion parameter): a parameter that controls the variance: $Var[Y_i \mid X_i] = \mu_i + \mu_i^2/\phi$. If $\phi \rightarrow \infty$, the model converges to the Poisson model, for finite values of $\phi$, it suggests a variance inflation of $\mu_i^2/\phi$ compared to the Poisson model. 
+
+Finally, we see that the log link applies to here again. We write out the whole model:
+
+\begin{align*}
+y_{i} &\sim \operatorname{Neg-Bin}(\mu_i, \phi) \\
+\log(\lambda_i) &= \alpha + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_3 + \log(\text{Exposure}_i) \\
+\alpha &\sim N(0, 2.5), \beta_i \sim N(0, 10) \\
+\phi^{-1} &\sim \text{Exp}(1)
+\end{align*}
+
+- **How to choose prior for the overdispersion parameter?**: We want the negative binomial model to 'cover' poisson model, in the sense that we want the model to accomodate when there is no overdispersion in the data. Again, when there is no overdispersion, $\phi \rightarrow \infty$. So we want a fair part of prior support on $\phi$ close to positive infinity. However, that would be really hard to do! A cleverer way is to place a prior on $\phi^{-1}$ instead of $\phi$, so that we can find a prior that has good support near zero for $\phi^{-1}$ -- an exponential distribution may just do that. 
+
+```{r}
+stan_code <- "
+data {
+  // number of observations
+  int N;
+  // response
+  int<lower = 0> y[N];
+  // number of covariates
+  int K;
+  // design matrix X 
+  matrix[N, K] X;
+  // an offset is a term with known coefficient 1
+  vector[N] offset; 
+}
+parameters {
+  // regression coefficients
+  real a;
+  vector[K] b;
+  // will put prior on 1 / sqrt(phi)
+  real<lower = 0.> sqrt_phi_reciprocal;
+}
+transformed parameters {
+  real<lower = 0.> phi;
+  vector<lower = 0.>[N] mu;
+  phi = 1. / sqrt_phi_reciprocal^2;
+  mu = exp(a + X * b + offset);
+}
+model {
+  a ~ normal(0., 10.);
+  b ~ normal(0., 2.5);
+  // putting prior on 1 / sqrt(phi) allows shrinking to no dispersion
+  sqrt_phi_reciprocal ~ exponential(1);
+  // likelihood
+  y ~ neg_binomial_2(mu, phi);
+}
+generated quantities {
+  // simulate data from the posterior
+  vector[N] y_rep;
+  vector[N] log_lik;
+  // log-likelihood posterior
+  for (i in 1:N) {
+    y_rep[i] = neg_binomial_2_rng(mu[i], phi);
+    log_lik[i] = neg_binomial_2_lpmf(y[i] | mu[i], phi);
+  }
+}
+"
+fit_nb <- stan(model_code = stan_code, data = d)
+print(fit_nb, pars = c("a", "b", "phi"))
+plot(fit_nb, pars = c("a", "b", "phi"))
+```
+
+
+# Posterior predictive checks 
+
+## density comparison
+
+We can compare the empirical density of the observed data to the posterior predictive density from the fitted models, to compare the goodness-of-fit and these models:
+
+```{r}
+yrep_pois <- rstan::extract(fit_poisson, pars = "y_rep")$y_rep
+
+# yrep_pois_alt <- as.matrix(fit_poisson, pars = "y_rep")
+# extract() permutes the order of the draws, 
+# so these two matrices aren't in the same order
+
+ppc_dens_overlay(y = d$y, yrep = yrep_pois[1:50, ]) + xlim(0, 100)
+```
+
+```{r}
+yrep_nb <- rstan::extract(fit_nb, pars = "y_rep")$y_rep
+
+ppc_dens_overlay(y = d$y, yrep = yrep_nb[1:50, ]) + xlim(0, 100)
+```
+
+This is in line to what we have seen in the homeworks. You can see the second model has a much better model fit compared to the first one, due to the flexibility in capturing model variance overdispersion.
+
+# Goodness-of-fit Indicators: WAIC and LOO-CV
+
+## WAIC: Information Criteria: 
+
+WAIC is called widely-applicable information criterion or Watanabe-Akaike information criterion. It is mostly minus two times the log pointwise predictive density, so in general, the lower WAIC the better the model fit. There is an extra penalizing term on the effective number of parameters that penalizes the complexity of the model, so the more effective parameters, higher the WAIC. 
+
+We will be using functions in stan as a tool to calculate them. 
+
+```{r}
+ll_poisson <- extract_log_lik(fit_poisson, merge_chains = FALSE)
+ll_neg_binomial <- extract_log_lik(fit_nb, merge_chains = FALSE)
+waic_poisson <- waic(ll_poisson)
+waic_neg_binomial <- waic(ll_neg_binomial)
+loo_compare(waic_poisson, waic_neg_binomial)
+```
+
+## LOO-CV: leave one out cross validation
+
+We can also look at the leave-one-out cross validation estimate of the log likelihood, as an indicator of the models' predictive performance. The higher, the better.
+
+```{r}
+loo_poisson <- loo(fit_poisson)
+loo_neg_binomial <- loo(fit_nb)
+loo_compare(loo_poisson, loo_neg_binomial)
+```

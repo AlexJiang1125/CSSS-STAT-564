@@ -1,0 +1,44 @@
+---
+title: "Homework 5"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# 2.1(d), 2.2(c)
+
+- Posterior predictive check
+  - Sample 200 posterior draws $(\mu_i^{(b)}, \sigma^{(b)}), b = 1,...,200$
+  - For each set of posterior draws, we can sample predicted datasets $Y_{pred}^{(b)}$, from $N(\mu_i^{(b)}, \sigma^{(b)})$
+  - You can use `dens()` in the `rethinking` package to create density plots. For more information you can type `rethinking::dens()` in the console window. 
+  
+# 2.2(e)
+
+- Under the model specified, we can write out expressions for APD:
+$$
+\mathrm{APD}_{y x}=\beta_{1}+2 \beta_{2} \mathbb{E}\left[X_{i}\right] = \beta_{1}+2 \beta_{2}\mu_x
+$$
+
+Placing a prior on $\mu_x$, essentially we treat APD as a function of model parameters, and we can thus generate posterior draws based on the fitted model.
+
+- You can introduce the parameter `mu_x` in your jags code, and then extract posterior samples of $\beta_1, \beta_2$ and $\mu_x$, this allows you to generate posterior draws of APD. 
+
+# 2.2(f)
+
+The goal is to estimate $\mathbb{E}\left[X_{i}\right]$ using Bayesian Bootstrap. We do the similar thing we just covered -- sample weights, take weighted mean based on X, repeat $M$ times if you have $M$ posterior samples. The posterior draws is 
+
+$$
+\mathrm{APD}_{y x}^{(m)}=\beta_{1}^{(m)}+2 \beta_{2}^{(m)}\mu_x^{(m)}
+$$
+
+where $\mu_x^{(m)}$ is the Bootstrap sample. 
+
+
+# 3.1 
+
+As the three questions are similar in spirit, I will go through the first one instead. 
+
+- Choose the set of confounders you want to control -- $X_1$ is a confounder, $X_2$ is a mediator, adjust for $X_1$
+  - There is a cool package called `dagitty` that allows you to check your reasoning. See some examples here: http://dagitty.net/primer/. 
+- For full interaction model we need to consider all main and interaction effects -- $D, X_1, DX_1$ for our case.
+- Write out $E[Y \mid D =1, X]$ and $E[Y \mid D =0, X]$, use what we learned in Bayesian Bootstrapping to generate ATE posterior draws

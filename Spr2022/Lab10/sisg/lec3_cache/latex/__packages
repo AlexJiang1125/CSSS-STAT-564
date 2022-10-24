@@ -1,0 +1,10 @@
+base
+knitr
+Matrix
+foreach
+sp
+INLA
+brinla
+dplyr
+tidyr
+ggplot2
